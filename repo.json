@@ -1,0 +1,27 @@
+[
+    {
+        "Author": "amarinne",
+        "Name": "Auto-Marketbuddy",
+        "Punchline": "Automate your retainer pricing with AllaganMarket!",
+        "Description": "Automatically sets retainer prices by integrating with AllaganMarket. Click an item, get market data, apply undercut, and confirm - all automatically. Supports batch processing of multiple items.",
+        "InternalName": "AutoMarketbuddy",
+        "AssemblyVersion": "1.0.0.0",
+        "RepoUrl": "https://github.com/amarinne/Auto-Marketbuddy",
+        "ApplicableVersion": "any",
+        "DalamudApiLevel": 14,
+        "DownloadLinkInstall": "https://github.com/amarinne/Auto-Marketbuddy/releases/latest/download/AutoMarketbuddy.dll",
+        "IsHide": false,
+        "IsTestingExclusive": false,
+        "DownloadLinkTesting": "https://github.com/amarinne/Auto-Marketbuddy/releases/latest/download/AutoMarketbuddy.dll",
+        "DownloadLinkUpdate": "https://github.com/amarinne/Auto-Marketbuddy/releases/latest/download/AutoMarketbuddy.dll",
+        "DownloadCount": 0,
+        "LastUpdated": "1736899200",
+        "Changelog": "* Initial release - automated retainer price adjustments with AllaganMarket integration",
+        "Tags": [
+            "market",
+            "retainer",
+            "automation",
+            "marketbuddy"
+        ]
+    }
+]
