@@ -85,6 +85,10 @@ namespace AutoMarketbuddy
                 {
                     MainWindow.IsOpen = true;
                 }
+                else if (!isRetainerListOpen && wasRetainerListOpen)
+                {
+                    MainWindow.IsOpen = false;
+                }
                 wasRetainerListOpen = isRetainerListOpen;
             }
 
