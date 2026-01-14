@@ -1,0 +1,18 @@
+{
+  "Author": "LocalUser",
+  "Name": "Auto-Marketbuddy",
+  "InternalName": "AutoMarketbuddy",
+  "AssemblyVersion": "1.0.0.0",
+  "Description": "Automated retainer price adjustments using AllaganMarket market data.",
+  "ApplicableVersion": "any",
+  "LoadRequiredState": 0,
+  "LoadSync": false,
+  "CanUnloadAsync": true,
+  "Punchline": "Auto-undercuts retainer items with market data.",
+  "Tags": [
+    "market",
+    "retainer",
+    "automation",
+    "marketbuddy"
+  ]
+}
