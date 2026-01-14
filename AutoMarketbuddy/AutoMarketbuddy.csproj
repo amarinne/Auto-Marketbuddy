@@ -2,8 +2,8 @@
 <Project Sdk="Dalamud.NET.Sdk/14.0.1">
   <PropertyGroup>
     <Authors>LocalUser</Authors>
-    <Version>1.0.0.0</Version>
-    <Description>Automated retainer price adjustments using AllaganMarket market data.</Description>
+    <Version>1.0.1.0</Version>
+    <Description>Automated retainer price adjustments with market data.</Description>
     <Copyright></Copyright>
     <DalamudPluginManifest>AutoMarketbuddy.json</DalamudPluginManifest>
   </PropertyGroup>
