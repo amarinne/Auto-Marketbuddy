@@ -49,30 +49,6 @@ namespace AutoMarketbuddy.Windows
                 ImGui.TextColored(new Vector4(1, 0, 0, 1), $"Error: {executor.LastError}");
             }
 
-            ImGui.Spacing();
-            var verbose = configuration.VerboseLogging;
-            if (ImGui.Checkbox("Verbose Logging", ref verbose))
-            {
-                configuration.VerboseLogging = verbose;
-                configuration.Save();
-            }
-            
-            var recordMode = configuration.RecordMode;
-            if (ImGui.Checkbox("Record Window States", ref recordMode))
-            {
-                configuration.RecordMode = recordMode;
-                configuration.Save();
-            }
-            if (ImGui.IsItemHovered())
-            {
-                ImGui.SetTooltip("Continuously log all window states as you interact with the game.\nUse this to record the exact window state sequence.");
-            }
-
-            ImGui.Spacing();
-            ImGui.Text("Instructions:");
-            ImGui.TextWrapped("1. Open Retainer Sell List.");
-            ImGui.TextWrapped("2. Ensure AllaganMarket plugin is loaded.");
-            ImGui.TextWrapped("3. Click Start.");
         }
     }
 }
