@@ -1,0 +1,14 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <Authors>amarinne</Authors>
+    <Version>0.2.0.0</Version>
+    <Description>Read-only game state for a local desktop dashboard.</Description>
+    <DalamudPluginManifest>XivCompanionBridge.json</DalamudPluginManifest>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <Use_Dalamud_FFXIVClientStructs>false</Use_Dalamud_FFXIVClientStructs>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="XivCompanionBridge.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

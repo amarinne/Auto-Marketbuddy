@@ -11,9 +11,9 @@ namespace AutoMarketbuddy
 
         public int UndercutAmount { get; set; } = 1;
         public int WaitDelayMillis { get; set; } = 500;
-        public bool CheckRetainerPrice { get; set; } = true;
-        public bool VerboseLogging { get; set; } = false;
-        public bool RecordMode { get; set; } = false;
+        public bool SyncWindowWithSellList { get; set; } = true;
+        public bool ExitRetainerOnFinish { get; set; } = false;
+        public bool UseSaleHistoryWhenNoListings { get; set; } = false;
 
         [NonSerialized]
         private IDalamudPluginInterface? PluginInterface;

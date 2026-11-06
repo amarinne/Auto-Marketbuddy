@@ -1,54 +1,107 @@
 using System;
 using System.Numerics;
 using AutoMarketbuddy.Services;
-using Dalamud.Interface;
-using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Windowing;
 
-namespace AutoMarketbuddy.Windows
+namespace AutoMarketbuddy.Windows;
+
+public sealed class MainWindow(MarketSession session, Configuration configuration,
+    Action<bool> start, Action stop, Func<uint, string> itemName)
+    : Window("Auto-Marketbuddy##AutoMarketbuddyMainWindow", ImGuiWindowFlags.None)
 {
-    public class MainWindow : Window, IDisposable
+    private int lastResultCount;
+    private int scrollFramesLeft;
+
+    public override void PreDraw()
     {
-        private readonly UndercutExecutor executor;
-        private readonly Configuration configuration;
+        ImGui.SetNextWindowSize(new Vector2(460, 520), ImGuiCond.FirstUseEver);
+        ImGui.SetNextWindowSizeConstraints(new Vector2(280, 220), new Vector2(float.MaxValue, float.MaxValue));
+    }
 
-        public MainWindow(UndercutExecutor executor, Configuration configuration) 
-            : base("Auto-Marketbuddy##AutoMarketbuddyMainWindow", ImGuiWindowFlags.AlwaysAutoResize)
+    public override void OnClose() => stop();
+
+    public override void Draw()
+    {
+        ImGui.TextUnformatted(session.Status);
+        if (session.IsRunning)
         {
-            this.executor = executor;
-            this.configuration = configuration;
+            if (ImGui.Button("Stop")) stop();
         }
-
-        public void Dispose()
+        else
         {
-        }
-
-        public override void Draw()
-        {
-            if (ImGui.Button(executor.IsRunning ? "Stop Undercutting" : "Start Undercutting"))
-            {
-                if (executor.IsRunning)
-                {
-                    executor.Stop();
-                }
-                else
-                {
-                    executor.Start();
-                }
-            }
-
+            if (ImGui.Button("Preview")) start(false);
             ImGui.SameLine();
-            ImGui.TextColored(executor.IsRunning ? new Vector4(0, 1, 0, 1) : new Vector4(1, 0, 0, 1), 
-                executor.IsRunning ? "RUNNING" : "STOPPED");
-
-            ImGui.Separator();
-
-            ImGui.Text($"State: {executor.CurrentState}");
-            if (!string.IsNullOrEmpty(executor.LastError))
-            {
-                ImGui.TextColored(new Vector4(1, 0, 0, 1), $"Error: {executor.LastError}");
-            }
-
+            if (ImGui.Button("Apply")) start(true);
         }
+
+        ImGui.BeginDisabled(session.IsRunning);
+        ImGui.SetNextItemWidth(90f);
+        var undercut = configuration.UndercutAmount;
+        if (ImGui.InputInt("Undercut", ref undercut, 0, 0))
+        {
+            configuration.UndercutAmount = Math.Clamp(undercut, 0, (int)Pricing.MaximumPrice);
+            configuration.Save();
+        }
+        ImGui.EndDisabled();
+
+        var useHistory = configuration.UseSaleHistoryWhenNoListings;
+        if (ImGui.Checkbox("Use recent sale price when no listings", ref useHistory))
+        {
+            configuration.UseSaleHistoryWhenNoListings = useHistory;
+            configuration.Save();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Off (default) leaves the price as-is when the market has no competing listing.");
+
+        var syncWindow = configuration.SyncWindowWithSellList;
+        if (ImGui.Checkbox("Open/close with retainer sell list", ref syncWindow))
+        {
+            configuration.SyncWindowWithSellList = syncWindow;
+            configuration.Save();
+        }
+
+        var exitOnFinish = configuration.ExitRetainerOnFinish;
+        if (ImGui.Checkbox("Exit retainer when finish", ref exitOnFinish))
+        {
+            configuration.ExitRetainerOnFinish = exitOnFinish;
+            configuration.Save();
+        }
+
+        if (session.LastError.Length > 0) ImGui.TextWrapped($"Stopped: {session.LastError}");
+        if (session.Results.Count == 0) return;
+
+        ImGui.Separator();
+        if (!ImGui.BeginChild("##ResultsScroll", new Vector2(0, 0), false)) { ImGui.EndChild(); return; }
+        if (ImGui.BeginTable("##Results", 2, ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable))
+        {
+            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableSetupColumn("Price", ImGuiTableColumnFlags.WidthFixed, 170f);
+            ImGui.TableHeadersRow();
+            foreach (var result in session.Results)
+            {
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(itemName(result.Item.ItemId) + (result.Item.IsHq ? " HQ" : ""));
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(result.ProposedPrice is uint proposed && proposed != result.Item.Price
+                    ? $"{result.Item.Price:N0} -> {proposed:N0}"
+                    : $"{result.Item.Price:N0}");
+            }
+            ImGui.EndTable();
+        }
+        if (session.Results.Count != lastResultCount)
+        {
+            lastResultCount = session.Results.Count;
+            scrollFramesLeft = 3;
+        }
+        // Anchor to the end for a few frames: the scroll range only grows
+        // after the new row is laid out, so a single SetScrollY clamps short.
+        if (scrollFramesLeft > 0)
+        {
+            ImGui.SetScrollHereY(1.0f);
+            scrollFramesLeft--;
+        }
+        ImGui.EndChild();
     }
 }

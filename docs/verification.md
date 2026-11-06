@@ -1,0 +1,47 @@
+# Verification
+
+## Offline acceptance
+
+Run `./scripts/check.sh`. The behavior checks compile the production pricing, comparison-capture, and session code directly, without Dalamud or a game process.
+
+Checks cover quality and ownership filters, single subtraction, price bounds, complete responses, stale and conflicting data, Stop, restart, timeouts, changed listing identity, and sequential acknowledgement. Package checks read the assembly metadata without loading the plugin. They require `AutoMarketbuddy`, version `1.1.0.0`, and API 15 in the source manifest, package, and catalog.
+
+Sale-history fallback checks cover the toggle off (leave unchanged, no history read), toggle on (newest same-quality sale minus undercut, confirmed once), quality/mannequin/item filtering, no usable sale, a missing history packet timing out instead of reusing a price, and reuse of a cached empty-market decision on the next retainer.
+
+Cache checks cover Preview-to-Apply reuse, duplicate listings in Preview, cross-retainer targeting, item/quality misses, refresh, five-minute expiry, expiry before confirmation, context changes, and Stop. Cache hits do not extend expiry or repeat the market comparison. Missing or expired entries use the normal in-game comparison path.
+
+The adapter compiles against the selected installed Dalamud and FFXIVClientStructs assemblies. Compilation cannot establish that native signatures, event registrations, or server acknowledgement behave as expected in the game.
+
+UI and chat commands enter the same queue. The framework drains that queue before advancing the session. Normal unload runs on the framework thread because `CanUnloadAsync` is false. Shutdown releases ownership without native cleanup if the framework is already unavailable. Update, draw, command, and market-event registrations are removed on disposal.
+
+## Owner acceptance
+
+1. Keep the installed plugins and restored configuration unchanged until a development test is explicitly arranged.
+2. Build with `AMB_PACKAGE_DIR=/tmp/amb-owner-test ./scripts/check.sh`.
+3. Load that DLL through Dalamud's development-plugin mechanism in an owner-controlled session. Keep companion automation disabled.
+4. Open a retainer sale list with known HQ and NQ listings. Sort the list differently from inventory order.
+5. Run `/aundercut preview`. Check the reported slot, item, quality, current price, and proposed unit price against the game.
+6. Confirm that preview leaves every listing price and quantity unchanged. Inspect the log for unsupported-control errors.
+7. Repeat preview and use Stop while waiting for comparison data. Close the control window during another preview.
+8. Close the sale list during preview. Verify that the run stops and does not operate on another retainer.
+9. Unload and reload the development plugin. Verify that one command and one update subscription remain active.
+
+Preview still opens native editors and comparison windows. Its control path never sets or confirms a price. Empty-market responses without a new offerings packet stop on timeout instead of trusting cached data.
+
+For later builds, Dalamud's dev-plugin automatic reload can replace manual disable and enable steps. Stage the checked build first. Replace the DLL while the game is idle and AMB is stopped, with no pending confirmation. Dalamud unloads the old instance before loading the replacement. Reload resets the session.
+
+Arrange a separate owner-approved transaction test only after preview passes. Use one low-value listing and check the server-visible result after one price confirmation. Verify that the run continues only after the local listing price matches. A local cache match is not proof of server persistence. A submitted confirmation cannot be cancelled or rolled back by Stop.
+
+For a cache test, Preview one retainer, then Apply within five minutes. Preview should compare duplicate items of the same quality only once. The Apply trace should show Cache and no repeated Compare Prices request. On the next retainer, matching items and quality should reuse the same response. Missing entries should compare in game. After five minutes, Apply should compare again. Each new Preview refreshes the current retainer's entries.
+
+The plugin compares only the first 100 listings returned by the game. It filters retainers registered to the current character; it cannot identify every retainer on other characters or accounts. Avoid manual market interaction during a run. Marketbuddy may stay loaded: each run holds its `Marketbuddy.Lock` interop lock from Start until completion, Stop, failure, or unload, and re-acquires it before opening each price editor. Offline checks cover that hold/release lifecycle with a fake market; the native lock against the real Marketbuddy build still needs the owner test below. Allagan Market and AutoRetainer remain blocked, and the adapter cannot identify every automation plugin.
+
+For a Marketbuddy coexistence test, enable Marketbuddy with its defaults (auto-open compare prices, click-to-set price, auto-confirm), then Preview and Apply. Marketbuddy should not auto-open the price list, paste, or set prices during the run, and should work normally again after the run ends. Also test one listing priced below the target: Apply should raise it to lowest competing price minus the undercut and verify the new local price.
+
+For the sale-history fallback, leave the toggle off and Preview an item with no competing listings of its quality: the listing should be reported unchanged with no price submitted. Then enable "Use recent sale price when no listings" and Preview again: the result should cite History and propose the newest same-quality sale minus the undercut. This path depends on the game sending the history packet with the same Compare Prices request; the offline checks cannot prove that. If it does not arrive, the run stops on the 30-second deadline without setting a price — report that rather than retrying.
+
+## Compatibility
+
+`InternalName` remains `AutoMarketbuddy`; existing `UndercutAmount` and `WaitDelayMillis` values remain readable. Wait delays are measured in milliseconds and bounded to 250–5000 ms per transition. Each state has a 30-second wall-clock deadline.
+
+`/aundercut start` now previews. Use `apply` explicitly for price changes. The former hidden record, verbose-log, and retainer-check flags did not control reliable pricing behavior and are no longer used. Prices are always checked, and a run sets each price to the undercut target, raising or lowering it as needed. Configuration is saved only after an explicit settings edit.

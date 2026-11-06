@@ -1,0 +1,14 @@
+{
+  "Author": "amarinne",
+  "Name": "XIV Companion Bridge",
+  "InternalName": "XivCompanionBridge",
+  "AssemblyVersion": "0.2.0.0",
+  "Description": "Publishes read-only game state to a local file for the external companion window.",
+  "Punchline": "Read-only state for a local desktop dashboard.",
+  "DalamudApiLevel": 15,
+  "ApplicableVersion": "any",
+  "LoadRequiredState": 0,
+  "LoadSync": false,
+  "CanUnloadAsync": true,
+  "Tags": ["debug", "companion"]
+}
