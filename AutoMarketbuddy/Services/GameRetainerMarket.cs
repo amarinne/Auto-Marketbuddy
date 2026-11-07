@@ -32,6 +32,7 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
     private const string MarketbuddyLockToken = "AutoMarketbuddy";
     private readonly ICallGateSubscriber<string, bool> marketbuddyLock;
     private readonly ICallGateSubscriber<string, bool> marketbuddyUnlock;
+    private readonly AutoRetainerSuppression autoRetainer;
     private bool marketbuddyHeld;
     private HashSet<ulong> ownRetainers = new();
     private SaleItem? ownedItem;
@@ -56,12 +57,22 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
         this.framework = framework;
         marketbuddyLock = pluginInterface.GetIpcSubscriber<string, bool>("Marketbuddy.Lock");
         marketbuddyUnlock = pluginInterface.GetIpcSubscriber<string, bool>("Marketbuddy.Unlock");
+        var autoRetainerGetSuppressed = pluginInterface.GetIpcSubscriber<bool>("AutoRetainer.GetSuppressed");
+        var autoRetainerSetSuppressed = pluginInterface.GetIpcSubscriber<bool, object>("AutoRetainer.SetSuppressed");
+        autoRetainer = new(
+            () => pluginInterface.InstalledPlugins.Any(x => x.IsLoaded && x.InternalName == "AutoRetainer"),
+            autoRetainerGetSuppressed.InvokeFunc, autoRetainerSetSuppressed.InvokeAction);
         board.OfferingsReceived += OnOfferings;
         board.HistoryReceived += OnHistory;
     }
 
     public void BeginRun()
     {
+        // Older builds without the suppression IPC cannot be paused. The session
+        // still stops if a retainer window or listing changes.
+        try { autoRetainer.Acquire(); }
+        catch (Exception) { /* AutoRetainer is loaded without its suppression IPC. */ }
+
         if (marketbuddyHeld) return;
         var loaded = pluginInterface.InstalledPlugins.Any(x => x.IsLoaded && x.InternalName == "Marketbuddy");
         try { marketbuddyLock.InvokeFunc(MarketbuddyLockToken); }
@@ -77,6 +88,9 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
 
     public void EndRun()
     {
+        try { autoRetainer.Release(); }
+        catch (Exception) { /* AutoRetainer was unloaded mid-run; its suppression state is gone with it. */ }
+
         if (!marketbuddyHeld) return;
         marketbuddyHeld = false;
         try { marketbuddyUnlock.InvokeFunc(MarketbuddyLockToken); }
@@ -120,7 +134,6 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
     {
         if (!ListVisible || !EditorClosed || Ready(Addon("ContextMenu")) || Ready(Addon("ItemSearch")))
             throw new InvalidOperationException("Open the retainer sale list and close other market windows first.");
-        CheckOtherPlugins();
         var list = Addon("RetainerSellList");
         listId = list->Id;
         listAddress = (nint)list;
@@ -137,21 +150,10 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
         return items;
     }
 
-    private void CheckOtherPlugins()
-    {
-        // Marketbuddy may stay loaded: BeginRun holds its interop lock for the
-        // whole run, so its handlers stay out. Other retainer automation has
-        // no such lock and still conflicts.
-        if (pluginInterface.InstalledPlugins.Any(x => x.IsLoaded &&
-                x.InternalName is "AllaganMarket" or "AutoRetainer"))
-            throw new InvalidOperationException("Disable Allagan Market and AutoRetainer before starting this run.");
-    }
-
     public void ValidateSession(SaleItem item)
     {
         if (!framework.IsInFrameworkUpdateThread || framework.IsFrameworkUnloading)
             throw new InvalidOperationException("Game controls require an active framework thread.");
-        CheckOtherPlugins();
         var list = Addon("RetainerSellList");
         var manager = RetainerManager.Instance();
         var agent = AgentRetainer.Instance();

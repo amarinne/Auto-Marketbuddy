@@ -390,6 +390,45 @@ Check("interop hold spans a run and is released at completion, Stop, and failed 
     Equal(false, game.InteropHeld);
     if (game.EndCalls < 3) throw new Exception("Failed Start did not release the interop hold.");
 });
+Check("AutoRetainer suppression is held for a run and released only when owned", () =>
+{
+    var loaded = true;
+    var suppressed = false;
+    var writes = 0;
+    var ar = new AutoRetainerSuppression(() => loaded, () => suppressed, value =>
+    {
+        writes++;
+        suppressed = value;
+    });
+    ar.Acquire();
+    ar.Acquire();
+    Equal(true, suppressed);
+    Equal(true, ar.IsHeld);
+    Equal(1, writes);
+    suppressed = false; // AutoRetainer reloaded during the run.
+    ar.Acquire();
+    Equal(true, suppressed);
+    Equal(2, writes);
+    ar.Release();
+    ar.Release();
+    Equal(false, suppressed);
+    Equal(false, ar.IsHeld);
+    Equal(3, writes);
+
+    suppressed = true;
+    ar.Acquire();
+    Equal(true, suppressed);
+    Equal(false, ar.IsHeld);
+    ar.Release();
+    Equal(true, suppressed); // Another plugin owns this suppression.
+
+    suppressed = false;
+    loaded = false;
+    ar.Acquire();
+    ar.Release();
+    Equal(false, suppressed);
+    Equal(3, writes);
+});
 Check("Stop at every stage prevents every subsequent confirmation", () =>
 {
     for (var stopAt = 0; stopAt <= 5; stopAt++)
@@ -721,7 +760,7 @@ if (args.Length == 2)
         foreach (var doc in new[] { manifest.RootElement, source.RootElement, catalog.RootElement[0] })
         {
             Equal("AutoMarketbuddy", doc.GetProperty("InternalName").GetString());
-            Equal("1.1.0.0", doc.GetProperty("AssemblyVersion").GetString());
+            Equal("1.1.1.0", doc.GetProperty("AssemblyVersion").GetString());
             Equal(15, doc.GetProperty("DalamudApiLevel").GetInt32());
         }
         Equal(false, manifest.RootElement.GetProperty("CanUnloadAsync").GetBoolean());
@@ -733,9 +772,9 @@ if (args.Length == 2)
         var metadata = pe.GetMetadataReader();
         var assembly = metadata.GetAssemblyDefinition();
         Equal("AutoMarketbuddy", metadata.GetString(assembly.Name));
-        Equal(new Version(1, 1, 0, 0), assembly.Version);
-        if (!catalog.RootElement[0].GetProperty("DownloadLinkInstall").GetString()!.Contains("/v1.1.0/"))
-            throw new Exception("Catalog must use the candidate's versioned package URL.");
+        Equal(new Version(1, 1, 1, 0), assembly.Version);
+        if (!catalog.RootElement[0].GetProperty("DownloadLinkInstall").GetString()!.Contains("/v1.1.1/"))
+            throw new Exception("Catalog must use the release versioned package URL.");
         // The sale-history fallback changes prices, so its default must stay opt-in.
         var config = File.ReadAllText(Path.Combine(args[1], "AutoMarketbuddy/Configuration.cs"));
         if (!config.Contains("UseSaleHistoryWhenNoListings { get; set; } = false;"))
