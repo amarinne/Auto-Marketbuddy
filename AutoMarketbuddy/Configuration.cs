@@ -1,6 +1,7 @@
+using System;
+using AutoMarketbuddy.Services;
 using Dalamud.Configuration;
 using Dalamud.Plugin;
-using System;
 
 namespace AutoMarketbuddy
 {
@@ -14,6 +15,7 @@ namespace AutoMarketbuddy
         public bool SyncWindowWithSellList { get; set; } = true;
         public bool ExitRetainerOnFinish { get; set; } = false;
         public bool UseSaleHistoryWhenNoListings { get; set; } = false;
+        public AutoRetainerMode AutoRetainerMode { get; set; } = AutoRetainerMode.Off;
 
         [NonSerialized]
         private IDalamudPluginInterface? PluginInterface;

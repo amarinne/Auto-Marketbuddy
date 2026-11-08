@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Dalamud.Game.Network.Structures;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
@@ -25,6 +26,7 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
     private readonly IDalamudPluginInterface pluginInterface;
     private readonly IMarketBoard board;
     private readonly IFramework framework;
+    private readonly IDataManager data;
     private readonly ConcurrentQueue<Packet> packets = new();
     private readonly ConcurrentQueue<HistoryPacket> historyPackets = new();
     // Marketbuddy exposes this lock so other plugins can drive the retainer
@@ -44,9 +46,11 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
     private ushort editorId;
     private nint resultAddress;
     private ushort resultId;
+    private string sellMenuText = "";
 
     public GameRetainerMarket(IGameGui gui, IClientState client, IPlayerState player,
-        IObjectTable objects, IDalamudPluginInterface pluginInterface, IMarketBoard board, IFramework framework)
+        IObjectTable objects, IDalamudPluginInterface pluginInterface, IMarketBoard board, IFramework framework,
+        IDataManager dataManager)
     {
         this.gui = gui;
         this.client = client;
@@ -55,6 +59,7 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
         this.pluginInterface = pluginInterface;
         this.board = board;
         this.framework = framework;
+        data = dataManager;
         marketbuddyLock = pluginInterface.GetIpcSubscriber<string, bool>("Marketbuddy.Lock");
         marketbuddyUnlock = pluginInterface.GetIpcSubscriber<string, bool>("Marketbuddy.Unlock");
         var autoRetainerGetSuppressed = pluginInterface.GetIpcSubscriber<bool>("AutoRetainer.GetSuppressed");
@@ -128,7 +133,102 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
     private AddonRetainerSell* Editor => (AddonRetainerSell*)Addon("RetainerSell");
     private static bool Ready(AtkUnitBase* addon) => addon != null && addon->IsVisible && addon->IsReady;
     public bool ListVisible => Ready(Addon("RetainerSellList"));
+    public bool ListReady
+    {
+        get
+        {
+            if (!ListVisible) return false;
+            var manager = InventoryManager.Instance();
+            var container = manager == null ? null : manager->GetInventoryContainer(InventoryType.RetainerMarket);
+            return container != null && container->IsLoaded && container->Size == 20;
+        }
+    }
     public bool EditorClosed => !Ready((AtkUnitBase*)Editor) && !Ready(Addon("ItemSearchResult"));
+    public bool SellListClosed => !Ready(Addon("RetainerSellList"));
+
+    public bool HasListings
+    {
+        get
+        {
+            var inventory = Container();
+            for (short slot = 0; slot < inventory->Size; slot++)
+                if (inventory->GetInventorySlot(slot)->ItemId != 0) return true;
+            return false;
+        }
+    }
+
+    public string SelectedRetainerName
+    {
+        get
+        {
+            var manager = RetainerManager.Instance();
+            if (manager == null || !manager->IsReady || manager->LastSelectedRetainerId == 0) return "";
+            foreach (var retainer in manager->Retainers)
+                if (retainer.RetainerId == manager->LastSelectedRetainerId) return retainer.NameString;
+            return "";
+        }
+    }
+
+    // AutoRetainer fires its post-process callback at the retainer SelectString menu. Match the
+    // game's own "Sell items..." row instead of a menu index so reordering cannot select the
+    // retrieve or entrust entry.
+    private string SellMenuText
+    {
+        get
+        {
+            if (sellMenuText.Length == 0)
+                sellMenuText = data.GetExcelSheet<Lumina.Excel.Sheets.Addon>().GetRowOrDefault(2380)?.Text.ToString() ?? "";
+            return sellMenuText;
+        }
+    }
+
+    private int SellMenuIndex(AddonSelectString* addon)
+    {
+        var expected = SellMenuText;
+        var count = addon->PopupMenu.PopupMenu.EntryCount;
+        if (expected.Length == 0 || count <= 0 || count > 32 ||
+            addon->PopupMenu.PopupMenu.EntryNames == null) return -1;
+        for (var i = 0; i < count; i++)
+        {
+            var pointer = addon->PopupMenu.PopupMenu.EntryNames[i].Value;
+            var text = pointer == null ? null : Marshal.PtrToStringUTF8((nint)pointer);
+            if (text != null && text.StartsWith(expected, StringComparison.OrdinalIgnoreCase)) return i;
+        }
+        return -1;
+    }
+
+    public bool RetainerMenuReady
+    {
+        get
+        {
+            var addon = (AddonSelectString*)Addon("SelectString");
+            return Ready((AtkUnitBase*)addon) && SellMenuIndex(addon) >= 0;
+        }
+    }
+
+    public void OpenSellList()
+    {
+        if (!framework.IsInFrameworkUpdateThread || framework.IsFrameworkUnloading)
+            throw new InvalidOperationException("Game controls require an active framework thread.");
+        var addon = (AddonSelectString*)Addon("SelectString");
+        if (!Ready((AtkUnitBase*)addon))
+            throw new InvalidOperationException("The retainer menu is not ready.");
+        var index = SellMenuIndex(addon);
+        if (index < 0)
+            throw new InvalidOperationException("The retainer menu has no sale-list entry.");
+        AtkValue value = default;
+        value.Type = AtkValueType.Int;
+        value.Int = index;
+        addon->FireCallback(1, &value, true);
+    }
+
+    public void CloseSellList()
+    {
+        // Unload can run after the framework is gone. Leave the addon alone in that case.
+        if (framework.IsFrameworkUnloading || !framework.IsInFrameworkUpdateThread) return;
+        var list = Addon("RetainerSellList");
+        if (Ready(list)) list->Close(true);
+    }
 
     public IReadOnlyList<SaleItem> Capture()
     {

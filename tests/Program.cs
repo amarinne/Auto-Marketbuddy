@@ -745,6 +745,317 @@ Check("a cached empty market keeps its history price across retainers", () =>
     Equal("Cache", session.GetDiagnostics(7000).ComparisonSource);
     Equal(1, game.ConfirmCalls);
 });
+Check("AutoRetainer handoff requests once and runs one apply session", () =>
+{
+    var game = Fake();
+    using var f = new HandoffFixture(game, AutoRetainerMode.Apply);
+    f.Ipc.Step("Retainer");
+    Equal(1, f.Ipc.Requests);
+    Equal(true, f.Handoff.IsBusy);
+    Equal(false, f.Handoff.IsActive);
+    f.Ipc.Step("Retainer");
+    Equal(1, f.Ipc.Requests);
+    f.Handoff.ReadyToPostprocess("Retainer", 0);
+    f.Handoff.Update(0);
+    Equal(1, game.SellListOpens);
+    f.Handoff.Update(0);
+    Equal(true, f.Session.IsRunning);
+    for (var n = 1; n <= 4; n++) f.Tick(n * 500L);
+    game.Acknowledge();
+    for (var n = 5; n <= 10; n++) f.Tick(n * 500L);
+    Equal("Completed", f.Session.Status);
+    Equal(1, game.ConfirmCalls);
+    Equal(1, game.SellListCloses);
+    Equal(1, f.Ipc.Finishes);
+    Equal(false, f.Handoff.IsBusy);
+    Equal(0, f.Errors.Count);
+    f.Ipc.Ready("Retainer");
+    Equal(1, f.Ipc.Finishes);
+});
+Check("AutoRetainer handoff preview never sets or confirms a price", () =>
+{
+    var game = Fake();
+    using var f = new HandoffFixture(game, AutoRetainerMode.Preview);
+    f.Ipc.Step("Retainer");
+    f.Handoff.ReadyToPostprocess("Retainer", 0);
+    f.Handoff.Update(0);
+    f.Handoff.Update(0);
+    for (var n = 1; n <= 8; n++) f.Tick(n * 500L);
+    Equal("Completed", f.Session.Status);
+    Equal(0, game.SetCalls);
+    Equal(0, game.ConfirmCalls);
+    Equal(1, f.Ipc.Finishes);
+    Equal(false, f.Handoff.IsBusy);
+});
+Check("AutoRetainer handoff releases a duplicate callback and a busy run", () =>
+{
+    var game = Fake();
+    using var f = new HandoffFixture(game, AutoRetainerMode.Apply);
+    f.Ipc.Step("Retainer");
+    f.Handoff.ReadyToPostprocess("Retainer", 0);
+    f.Handoff.Update(0);
+    f.Handoff.ReadyToPostprocess("Retainer", 0);
+    Equal(1, game.SellListOpens);
+    Equal(0, f.Ipc.Finishes);
+
+    var busy = Fake();
+    using var g = new HandoffFixture(busy, AutoRetainerMode.Apply);
+    g.Ipc.Step("Retainer");
+    g.Session.Start(true, 1, 500, 0);
+    g.Handoff.ReadyToPostprocess("Retainer", 0);
+    Equal(1, g.Ipc.Finishes);
+    Equal(0, busy.SellListOpens);
+    Equal(false, g.Handoff.IsBusy);
+    g.Session.Stop();
+});
+Check("AutoRetainer handoff rejects a mismatched retainer and missing menu", () =>
+{
+    var game = Fake();
+    using var f = new HandoffFixture(game, AutoRetainerMode.Apply);
+    f.Ipc.Step("Retainer A");
+    f.Handoff.ReadyToPostprocess("Retainer B", 0);
+    Equal(1, f.Ipc.Finishes);
+    Equal(0, game.SellListOpens);
+    Equal(false, f.Handoff.IsBusy);
+
+    var late = Fake();
+    using var g = new HandoffFixture(late, AutoRetainerMode.Apply);
+    late.MenuReady = false;
+    g.Ipc.Step("Retainer");
+    g.Handoff.ReadyToPostprocess("Retainer", 0);
+    g.Handoff.Update(AutoRetainerHandoff.MenuTimeoutMillis);
+    Equal(1, g.Ipc.Finishes);
+    Equal(0, late.SellListOpens);
+    Equal(1, g.Errors.Count);
+});
+Check("AutoRetainer handoff closes a list that never becomes ready", () =>
+{
+    var game = Fake();
+    game.OpenListOnOpen = false;
+    using var f = new HandoffFixture(game, AutoRetainerMode.Apply);
+    f.Ipc.Step("Retainer");
+    f.Handoff.ReadyToPostprocess("Retainer", 0);
+    f.Handoff.Update(0);
+    f.Handoff.Update(0);
+    f.Handoff.Update(AutoRetainerHandoff.ListTimeoutMillis);
+    f.Handoff.Update(AutoRetainerHandoff.ListTimeoutMillis);
+    f.Handoff.Update(AutoRetainerHandoff.ListTimeoutMillis);
+    Equal(1, f.Ipc.Finishes);
+    Equal(1, game.SellListCloses);
+    Equal(1, f.Errors.Count);
+    Equal(false, f.Handoff.IsBusy);
+});
+Check("AutoRetainer handoff waits for the sale list container", () =>
+{
+    var game = Fake();
+    game.ListContentReady = false;
+    using var f = new HandoffFixture(game, AutoRetainerMode.Apply);
+    f.Ipc.Step("Retainer");
+    f.Handoff.ReadyToPostprocess("Retainer", 0);
+    f.Handoff.Update(0);
+    f.Handoff.Update(0);
+    Equal(false, f.Session.IsRunning);
+    game.ListContentReady = true;
+    f.Handoff.Update(0);
+    Equal(true, f.Session.IsRunning);
+    f.Handoff.Cancel("Stopped by the user.", 0);
+    Equal(1, f.Ipc.Finishes);
+});
+Check("AutoRetainer handoff skips a retainer with no active listings", () =>
+{
+    var game = Fake();
+    game.Snapshot = Array.Empty<SaleItem>();
+    game.Inventory = new();
+    using var f = new HandoffFixture(game, AutoRetainerMode.Apply);
+    f.Ipc.Step("Retainer");
+    f.Handoff.ReadyToPostprocess("Retainer", 0);
+    f.Handoff.Update(0);
+    f.Handoff.Update(0);
+    f.Handoff.Update(0);
+    f.Handoff.Update(0);
+    Equal("Idle", f.Session.Status);
+    Equal(0, game.ConfirmCalls);
+    Equal(1, f.Ipc.Finishes);
+    Equal(1, game.SellListCloses);
+    Equal(0, f.Errors.Count);
+});
+Check("AutoRetainer handoff stops on a changed listing without retrying", () =>
+{
+    var game = Fake();
+    using var f = new HandoffFixture(game, AutoRetainerMode.Apply);
+    f.Ipc.Step("Retainer");
+    f.Handoff.ReadyToPostprocess("Retainer", 0);
+    f.Handoff.Update(0);
+    f.Handoff.Update(0);
+    f.Tick(500);
+    f.Tick(1000);
+    game.Item = item with { Quantity = 4 };
+    f.Tick(1500);
+    Equal(false, f.Session.IsRunning);
+    Equal(0, game.ConfirmCalls);
+    f.Tick(2000);
+    f.Tick(2500);
+    Equal(1, f.Ipc.Finishes);
+    f.Tick(3000);
+    Equal(1, f.Ipc.Finishes);
+    Equal(0, game.ConfirmCalls);
+    if (!f.Handoff.LastError.Contains("listing changed")) throw new Exception(f.Handoff.LastError);
+});
+Check("AutoRetainer handoff releases after a failed session start", () =>
+{
+    var game = Fake();
+    game.FailBegin = true;
+    using var f = new HandoffFixture(game, AutoRetainerMode.Apply);
+    f.Ipc.Step("Retainer");
+    f.Handoff.ReadyToPostprocess("Retainer", 0);
+    f.Handoff.Update(0);
+    f.Handoff.Update(0);
+    Equal(false, f.Session.IsRunning);
+    Equal(1, f.Errors.Count);
+    f.Handoff.Update(0);
+    f.Handoff.Update(0);
+    Equal(1, f.Ipc.Finishes);
+    Equal(0, game.ConfirmCalls);
+    Equal(false, f.Handoff.IsBusy);
+});
+Check("AutoRetainer handoff releases when the sale list cannot close", () =>
+{
+    var game = Fake();
+    using var f = new HandoffFixture(game, AutoRetainerMode.Apply);
+    f.Ipc.Step("Retainer");
+    f.Handoff.ReadyToPostprocess("Retainer", 0);
+    f.Handoff.Update(0);
+    f.Handoff.Update(0);
+    for (var n = 1; n <= 4; n++) f.Tick(n * 500L);
+    game.Acknowledge();
+    f.Tick(2500);
+    f.Tick(3000);
+    game.CloseFails = true;
+    f.Tick(3500);
+    Equal(1, f.Ipc.Finishes);
+    Equal(false, f.Handoff.IsBusy);
+    Equal(1, f.Errors.Count);
+    f.Tick(4000);
+    Equal(1, f.Ipc.Finishes);
+});
+Check("AutoRetainer handoff Stop and mode-off cancel cleanly", () =>
+{
+    var game = Fake();
+    using var f = new HandoffFixture(game, AutoRetainerMode.Apply);
+    f.Ipc.Step("Retainer");
+    f.Handoff.ReadyToPostprocess("Retainer", 0);
+    f.Handoff.Update(0);
+    f.Handoff.Update(0);
+    f.Tick(500);
+    f.Handoff.Cancel("Stopped by the user.", 1000);
+    Equal(false, f.Session.IsRunning);
+    Equal(1, f.Ipc.Finishes);
+    Equal(1, game.SellListCloses);
+    f.Tick(2000);
+    Equal(1, f.Ipc.Finishes);
+    Equal(0, game.ConfirmCalls);
+
+    var mode = Fake();
+    using var g = new HandoffFixture(mode, AutoRetainerMode.Apply);
+    g.Ipc.Step("Retainer");
+    g.Handoff.ReadyToPostprocess("Retainer", 0);
+    g.Handoff.Update(0);
+    g.Handoff.Update(0);
+    g.Settings = new(AutoRetainerMode.Off, 1, 500, false);
+    g.Handoff.Update(1000);
+    Equal(1, g.Ipc.Finishes);
+    Equal(false, g.Handoff.IsBusy);
+});
+Check("AutoRetainer handoff survives unload, request failure and release failure", () =>
+{
+    var unavailable = Fake();
+    using var f = new HandoffFixture(unavailable, AutoRetainerMode.Apply);
+    f.Ipc.Step("Retainer");
+    f.Ipc.IsAvailable = false;
+    f.Handoff.Update(0);
+    Equal(false, f.Handoff.IsBusy);
+    Equal(0, f.Ipc.Finishes);
+    Equal(0, unavailable.SellListOpens);
+
+    var request = Fake();
+    using var g = new HandoffFixture(request, AutoRetainerMode.Apply);
+    g.Ipc.FailRequest = true;
+    g.Ipc.Step("Retainer");
+    Equal(1, g.Ipc.Requests);
+    Equal(false, g.Handoff.IsBusy);
+    Equal(1, g.Errors.Count);
+    g.Ipc.FailRequest = false;
+    g.Ipc.Step("Retainer");
+    Equal(2, g.Ipc.Requests);
+    Equal(true, g.Handoff.IsBusy);
+
+    var stopped = Fake();
+    using var s = new HandoffFixture(stopped, AutoRetainerMode.Apply);
+    s.Ipc.Step("Retainer");
+    s.Ipc.Busy = false;
+    s.Handoff.Update(0);
+    Equal(false, s.Handoff.IsBusy);
+    Equal(0, s.Ipc.Finishes);
+
+    var finish = Fake();
+    using var h = new HandoffFixture(finish, AutoRetainerMode.Apply);
+    h.Ipc.FailFinish = true;
+    h.Ipc.Step("Retainer");
+    h.Handoff.ReadyToPostprocess("Retainer", 0);
+    h.Handoff.Update(0);
+    h.Handoff.Update(0);
+    for (var n = 1; n <= 4; n++) h.Tick(n * 500L);
+    finish.Acknowledge();
+    for (var n = 5; n <= 10; n++) h.Tick(n * 500L);
+    Equal(1, h.Ipc.Finishes);
+    Equal(false, h.Handoff.IsBusy);
+    if (!h.Errors.Any(x => x.Contains("release failed"))) throw new Exception("Expected a release failure notice.");
+});
+Check("AutoRetainer handoff disposes an active session without a second release", () =>
+{
+    var game = Fake();
+    var f = new HandoffFixture(game, AutoRetainerMode.Apply);
+    f.Ipc.Step("Retainer");
+    f.Handoff.ReadyToPostprocess("Retainer", 0);
+    f.Handoff.Update(0);
+    f.Handoff.Update(0);
+    f.Dispose();
+    Equal(1, f.Ipc.Finishes);
+    Equal(false, f.Handoff.IsBusy);
+    Equal(1, game.SellListCloses);
+    Equal(0, game.ConfirmCalls);
+});
+Check("disposing a pending AutoRetainer request does not release another participant", () =>
+{
+    var game = Fake();
+    var f = new HandoffFixture(game, AutoRetainerMode.Apply);
+    f.Ipc.Step("Retainer");
+    // AutoRetainer can be waiting for another participant before AMB receives Ready.
+    f.Dispose();
+    Equal(1, f.Ipc.Requests);
+    Equal(0, f.Ipc.Finishes);
+    Equal(0, game.SellListOpens);
+});
+Check("AutoRetainer verifies its retainer again before starting the loaded list", () =>
+{
+    foreach (var selected in new[] { "Other retainer", "" })
+    {
+        var game = Fake();
+        using var f = new HandoffFixture(game, AutoRetainerMode.Apply);
+        f.Ipc.Step("Retainer");
+        f.Handoff.ReadyToPostprocess("Retainer", 0);
+        f.Handoff.Update(0);
+        // A retainer change while the list loads must not become the next session's target.
+        game.SelectedName = selected;
+        f.Handoff.Update(0);
+        Equal(false, f.Session.IsRunning);
+        Equal(0, game.BeginCalls);
+        Equal(0, game.ConfirmCalls);
+        f.Handoff.Update(0);
+        f.Handoff.Update(0);
+        Equal(1, f.Ipc.Finishes);
+    }
+});
 Console.WriteLine($"{count} behavior checks passed.");
 
 if (args.Length == 2)
@@ -779,6 +1090,8 @@ if (args.Length == 2)
         var config = File.ReadAllText(Path.Combine(args[1], "AutoMarketbuddy/Configuration.cs"));
         if (!config.Contains("UseSaleHistoryWhenNoListings { get; set; } = false;"))
             throw new Exception("Sale-history fallback must default to off.");
+        if (!config.Contains("AutoRetainerMode { get; set; } = AutoRetainerMode.Off;"))
+            throw new Exception("AutoRetainer automation must default to off.");
     });
 }
 
@@ -798,6 +1111,14 @@ sealed class FakeMarket(SaleItem item, IReadOnlyList<MarketListing> listings) : 
     public IReadOnlyList<SaleItem>? Snapshot;
     public Dictionary<short, SaleItem>? Inventory;
     public List<short> OpenedSlots = new();
+    public bool MenuReady = true;
+    public bool OpenListOnOpen = true;
+    public bool ListContentReady = true;
+    public string SelectedName = "Retainer";
+    public int SellListOpens;
+    public int SellListCloses;
+    public bool SellListOpen;
+    public bool CloseFails;
     private bool closed = true;
     public int BeginCalls;
     public int EndCalls;
@@ -806,6 +1127,25 @@ sealed class FakeMarket(SaleItem item, IReadOnlyList<MarketListing> listings) : 
     public void BeginRun() { BeginCalls++; if (FailBegin) throw new InvalidOperationException("lock unavailable"); InteropHeld = true; }
     public void EndRun() { EndCalls++; InteropHeld = false; }
     public IReadOnlySet<ulong> OwnRetainers { get; } = new HashSet<ulong> { 30, 31 };
+    public bool ListVisible => SellListOpen;
+    public bool ListReady => SellListOpen && ListContentReady;
+    public bool HasListings => Capture().Count > 0;
+    public bool SellListClosed => !SellListOpen;
+    public string SelectedRetainerName => SelectedName;
+    public bool RetainerMenuReady => MenuReady;
+    public void OpenSellList()
+    {
+        SellListOpens++;
+        MenuReady = false;
+        SellListOpen = OpenListOnOpen;
+    }
+    public void CloseSellList()
+    {
+        SellListCloses++;
+        if (CloseFails) throw new InvalidOperationException("close failed");
+        SellListOpen = false;
+        MenuReady = true;
+    }
     public IReadOnlyList<SaleItem> Capture() => Snapshot ?? new[] { Item };
     public void ValidateSession(SaleItem target)
     {
@@ -826,5 +1166,65 @@ sealed class FakeMarket(SaleItem item, IReadOnlyList<MarketListing> listings) : 
         if (Inventory == null) Item = Item with { Price = Proposed };
         else Inventory[OpenedSlot] = Inventory[OpenedSlot] with { Price = Proposed };
         closed = true;
+    }
+}
+
+sealed class FakeAutoRetainerIpc : IAutoRetainerIpc
+{
+    public bool IsAvailable { get; set; } = true;
+    public bool Busy { get; set; } = true;
+    public bool IsBusy => Busy;
+    public bool FailRequest { get; set; }
+    public bool FailFinish { get; set; }
+    public int Requests { get; private set; }
+    public int Finishes { get; private set; }
+    public event Action<string>? PostprocessStep;
+    public event Action<string>? ReadyToPostprocess;
+
+    public void RequestPostprocess()
+    {
+        Requests++;
+        if (FailRequest) throw new InvalidOperationException("request unavailable");
+    }
+
+    public void FinishPostprocess()
+    {
+        Finishes++;
+        if (FailFinish) throw new InvalidOperationException("finish unavailable");
+    }
+
+    public void Step(string retainerName) => PostprocessStep?.Invoke(retainerName);
+    public void Ready(string retainerName) => ReadyToPostprocess?.Invoke(retainerName);
+}
+
+sealed class HandoffFixture : IDisposable
+{
+    public readonly FakeMarket Game;
+    public readonly FakeAutoRetainerIpc Ipc = new();
+    public readonly MarketSession Session;
+    public readonly AutoRetainerHandoff Handoff;
+    public readonly List<string> Logs = new();
+    public readonly List<string> Errors = new();
+    public AutoRetainerSettings Settings;
+
+    public HandoffFixture(FakeMarket game, AutoRetainerMode mode)
+    {
+        Game = game;
+        Session = new MarketSession(game);
+        Settings = new AutoRetainerSettings(mode, 1, 500, false);
+        Handoff = new AutoRetainerHandoff(Session, game, Ipc, () => Settings, () => true,
+            message => Logs.Add(message), message => Errors.Add(message));
+    }
+
+    public void Tick(long now)
+    {
+        Session.Update(now);
+        Handoff.Update(now);
+    }
+
+    public void Dispose()
+    {
+        Handoff.Dispose();
+        Session.Dispose();
     }
 }

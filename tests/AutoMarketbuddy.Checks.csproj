@@ -11,5 +11,6 @@
     <Compile Include="../AutoMarketbuddy/Services/MarketSession.cs" Link="MarketSession.cs" />
     <Compile Include="../AutoMarketbuddy/Services/ComparisonCapture.cs" Link="ComparisonCapture.cs" />
     <Compile Include="../AutoMarketbuddy/Services/AutoRetainerSuppression.cs" Link="AutoRetainerSuppression.cs" />
+    <Compile Include="../AutoMarketbuddy/Services/AutoRetainerHandoff.cs" Link="AutoRetainerHandoff.cs" />
   </ItemGroup>
 </Project>

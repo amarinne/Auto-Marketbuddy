@@ -7,7 +7,7 @@ using Dalamud.Interface.Windowing;
 namespace AutoMarketbuddy.Windows;
 
 public sealed class MainWindow(MarketSession session, Configuration configuration,
-    Action<bool> start, Action stop, Func<uint, string> itemName)
+    AutoRetainerHandoff autoRetainer, Action<bool> start, Action stop, Func<uint, string> itemName)
     : Window("Auto-Marketbuddy##AutoMarketbuddyMainWindow", ImGuiWindowFlags.None)
 {
     private int lastResultCount;
@@ -24,7 +24,7 @@ public sealed class MainWindow(MarketSession session, Configuration configuratio
     public override void Draw()
     {
         ImGui.TextUnformatted(session.Status);
-        if (session.IsRunning)
+        if (session.IsRunning || autoRetainer.IsBusy)
         {
             if (ImGui.Button("Stop")) stop();
         }
@@ -67,6 +67,17 @@ public sealed class MainWindow(MarketSession session, Configuration configuratio
             configuration.ExitRetainerOnFinish = exitOnFinish;
             configuration.Save();
         }
+
+        var autoRetainerMode = (int)configuration.AutoRetainerMode;
+        ImGui.SetNextItemWidth(110f);
+        if (ImGui.Combo("During AutoRetainer", ref autoRetainerMode, new[] { "Off", "Preview", "Apply" }, 3))
+        {
+            configuration.AutoRetainerMode = (AutoRetainerMode)Math.Clamp(autoRetainerMode, 0, 2);
+            configuration.Save();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Run when AutoRetainer hands over the retainer. Apply changes prices; Off keeps manual control.");
+        if (autoRetainer.IsBusy) ImGui.TextWrapped($"AutoRetainer: {autoRetainer.Status}");
 
         if (session.LastError.Length > 0) ImGui.TextWrapped($"Stopped: {session.LastError}");
         if (session.Results.Count == 0) return;

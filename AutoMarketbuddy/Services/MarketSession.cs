@@ -89,6 +89,14 @@ public interface IRetainerMarket
     void EndRun();
     IReadOnlyList<SaleItem> Capture();
     IReadOnlySet<ulong> OwnRetainers { get; }
+    bool ListVisible { get; }
+    bool ListReady { get; }
+    bool HasListings { get; }
+    bool SellListClosed { get; }
+    string SelectedRetainerName { get; }
+    bool RetainerMenuReady { get; }
+    void OpenSellList();
+    void CloseSellList();
     void ValidateSession(SaleItem item);
     SaleItem ReadItem(short slot);
     void Open(SaleItem item);
