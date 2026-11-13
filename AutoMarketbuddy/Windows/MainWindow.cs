@@ -105,7 +105,7 @@ public sealed class MainWindow(MarketSession session, Configuration configuratio
                 ImGui.TextUnformatted(itemName(row.ItemId) + (row.IsHq ? " HQ" : "") +
                     (row.Count > 1 ? $" ×{row.Count}" : ""));
                 ImGui.TableNextColumn();
-                var price = row.PreviousPrice is uint previous
+                var price = row.PreviousPrice is uint previous && previous != row.Price
                     ? $"{previous:N0} -> {row.Price:N0}"
                     : $"{row.Price:N0}";
                 if (row.Kind == PriceChangeKind.Proposal)
