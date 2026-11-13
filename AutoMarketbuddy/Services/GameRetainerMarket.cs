@@ -62,7 +62,10 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
     private ushort editorId;
     private nint resultAddress;
     private ushort resultId;
-    private string sellMenuText = "";
+    // Addon sheet rows for retainer menu entries: "Sell items…" and "Quit".
+    private const uint SellMenuRow = 2380;
+    private const uint QuitMenuRow = 2383;
+    private readonly Dictionary<uint, string> menuTexts = new();
 
     public GameRetainerMarket(IGameGui gui, IClientState client, IPlayerState player,
         IObjectTable objects, IDalamudPluginInterface pluginInterface, IMarketBoard board, IFramework framework,
@@ -147,28 +150,71 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
 
     private int exitStage;
     private long exitDeadline;
+    private long nextTalkClick;
 
     public void BeginRetainerExit() => exitStage = 1;
     public void CancelRetainerExit() => exitStage = 0;
 
-    // Close the sell list, then the retainer menu that reappears under it.
-    // Stops at the retainer selection list so the next retainer can be picked.
+    // Close the sale list, choose Quit in the retainer menu, and click through the retainer's
+    // farewell dialog. Closing the menu addon only hid it and left the retainer called. Stops at
+    // the retainer selection list so the next retainer can be picked. Each stage has a deadline.
     public void UpdateRetainerExit(long now)
     {
         if (exitStage == 0) return;
+        if (!framework.IsInFrameworkUpdateThread || framework.IsFrameworkUnloading)
+        {
+            exitStage = 0;
+            return;
+        }
         if (exitStage == 1)
         {
             var list = Addon("RetainerSellList");
-            if (Ready(list)) { list->Close(true); exitStage = 2; exitDeadline = now + 5_000; return; }
+            if (Ready(list)) list->Close(true);
             exitStage = 2;
             exitDeadline = now + 5_000;
+            return;
         }
         if (exitStage == 2)
         {
-            var menu = Addon("SelectString");
-            if (Ready(menu)) { menu->Close(true); exitStage = 0; return; }
-            if (now >= exitDeadline) exitStage = 0;
+            var menu = (AddonSelectString*)Addon("SelectString");
+            var index = Ready((AtkUnitBase*)menu) ? MenuIndex(menu, QuitMenuRow) : -1;
+            if (index >= 0)
+            {
+                SelectMenu(menu, index);
+                exitStage = 3;
+                exitDeadline = now + 5_000;
+                nextTalkClick = 0;
+            }
+            else if (now >= exitDeadline) exitStage = 0;
+            return;
         }
+        // The retainer says goodbye in a Talk dialog that waits for a click.
+        if (Ready(Addon("RetainerList")) || now >= exitDeadline)
+        {
+            exitStage = 0;
+            return;
+        }
+        var talk = Addon("Talk");
+        if (Ready(talk) && now >= nextTalkClick)
+        {
+            ClickTalk(talk);
+            nextTalkClick = now + 300;
+        }
+    }
+
+    // The synthetic click that AutoRetainer (ECommons AddonMaster.Talk) uses to advance a dialog.
+    private static void ClickTalk(AtkUnitBase* talk)
+    {
+        var evt = new AtkEvent
+        {
+            Listener = (AtkEventListener*)talk,
+            Target = &AtkStage.Instance()->AtkEventTarget,
+        };
+        evt.State.StateFlags = (AtkEventStateFlags)132;
+        AtkEventData data = default;
+        talk->ReceiveEvent(AtkEventType.MouseDown, 0, &evt, &data);
+        talk->ReceiveEvent(AtkEventType.MouseClick, 0, &evt, &data);
+        talk->ReceiveEvent(AtkEventType.MouseUp, 0, &evt, &data);
     }
 
     public IReadOnlySet<ulong> OwnRetainers => ownRetainers;
@@ -237,22 +283,18 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
         }
     }
 
-    // AutoRetainer fires its post-process callback at the retainer SelectString menu. Match the
-    // game's own "Sell items..." row instead of a menu index so reordering cannot select the
-    // retrieve or entrust entry.
-    private string SellMenuText
+    // Match a retainer menu entry by the game's own text instead of a menu index, so reordering
+    // cannot select the retrieve or entrust entry.
+    private string MenuText(uint row)
     {
-        get
-        {
-            if (sellMenuText.Length == 0)
-                sellMenuText = data.GetExcelSheet<Lumina.Excel.Sheets.Addon>().GetRowOrDefault(2380)?.Text.ToString() ?? "";
-            return sellMenuText;
-        }
+        if (!menuTexts.TryGetValue(row, out var text) || text.Length == 0)
+            menuTexts[row] = text = data.GetExcelSheet<Lumina.Excel.Sheets.Addon>().GetRowOrDefault(row)?.Text.ToString() ?? "";
+        return text;
     }
 
-    private int SellMenuIndex(AddonSelectString* addon)
+    private int MenuIndex(AddonSelectString* addon, uint row)
     {
-        var expected = SellMenuText;
+        var expected = MenuText(row);
         var count = addon->PopupMenu.PopupMenu.EntryCount;
         if (expected.Length == 0 || count <= 0 || count > 32 ||
             addon->PopupMenu.PopupMenu.EntryNames == null) return -1;
@@ -270,7 +312,7 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
         get
         {
             var addon = (AddonSelectString*)Addon("SelectString");
-            return Ready((AtkUnitBase*)addon) && SellMenuIndex(addon) >= 0;
+            return Ready((AtkUnitBase*)addon) && MenuIndex(addon, SellMenuRow) >= 0;
         }
     }
 
@@ -281,9 +323,14 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
         var addon = (AddonSelectString*)Addon("SelectString");
         if (!Ready((AtkUnitBase*)addon))
             throw new InvalidOperationException("The retainer menu is not ready.");
-        var index = SellMenuIndex(addon);
+        var index = MenuIndex(addon, SellMenuRow);
         if (index < 0)
             throw new InvalidOperationException("The retainer menu has no sale-list entry.");
+        SelectMenu(addon, index);
+    }
+
+    private static void SelectMenu(AddonSelectString* addon, int index)
+    {
         AtkValue value = default;
         value.Type = AtkValueType.Int;
         value.Int = index;

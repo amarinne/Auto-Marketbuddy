@@ -32,7 +32,8 @@ UI and chat commands enter the same queue. The framework drains that queue befor
 8. With the sale list open, check that unchanged listings already appear in the table with their current price. Then open the price editor for one listing and click Compare Prices. Before you confirm anything, the table should show the proposed price as a dim row, and the log should contain one `Comparison captured:` line. Cancel the editor: the proposal stays dim. Repeat for the same listing and confirm the proposed price: the same row should become an applied change with no second row. Click Clear: the table should stay empty while the sale list stays open, and the log should have no new `Price baseline:` lines. Close and reopen the market result window, then run Apply for that item within five minutes: the trace should show Cache and no new Compare Prices request.
 9. Repeat preview and use Stop while waiting for comparison data. Close the control window during another preview.
 10. Close the sale list during preview. Verify that the run stops and does not operate on another retainer.
-11. Unload and reload the development plugin. Verify that one command and one update subscription remain active.
+11. Enable "Exit retainer when finish" and complete a run. The sale list should close, the retainer menu should select Quit, the farewell dialog should advance without a click, and the retainer list should return within five seconds.
+12. Unload and reload the development plugin. Verify that one command and one update subscription remain active.
 
 Preview still opens native editors and comparison windows. Its control path never sets or confirms a price. An empty market is accepted only after the game opens the result window for that item, issues a new search request, and sends no offerings packet for the grace period. Without that signal, the run stops on the existing deadline instead of trusting cached data.
 

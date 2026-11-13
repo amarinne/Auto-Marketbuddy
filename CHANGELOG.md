@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   price is dim and has a tooltip; a confirmed price updates the same row.
 
 ### Fixed
+- Dismiss the retainer when "Exit retainer when finish" is on. After a completed run, the plugin
+  closes the sale list, chooses Quit in the retainer menu, and clicks through the retainer's
+  farewell dialog until the retainer list returns. Before, it only hid the retainer menu.
 - Keep the price table empty after Clear while the sale list is open. Clear now keeps the known
   prices, so it does not record every listing as a new baseline again. The table also scrolls to
   the first new row instead of the last row.
