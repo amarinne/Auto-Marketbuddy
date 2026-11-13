@@ -250,6 +250,40 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
         return items;
     }
 
+    // The sale list shows its own order, which is not inventory slot order. AgentRetainer keeps
+    // the displayed entries with their inventory slots, top row first.
+    public IReadOnlyList<short> SaleListSlots
+    {
+        get
+        {
+            var agent = AgentRetainer.Instance();
+            if (agent == null) return Array.Empty<short>();
+            var entries = agent->SellListEntries;
+            var count = Math.Min(agent->SellListEntryCount, entries.Length);
+            if (count <= 0) return Array.Empty<short>();
+            var slots = new List<short>(count);
+            for (var index = 0; index < count; index++)
+                slots.Add((short)entries[index].InventorySlot);
+            return slots;
+        }
+    }
+
+    // A read-only view for manual edits and other plugins. It tolerates a list that changes
+    // between checks and never takes ownership of the editor.
+    public IReadOnlyList<SaleItem> Snapshot()
+    {
+        if (!ListVisible) return Array.Empty<SaleItem>();
+        try
+        {
+            var items = new List<SaleItem>();
+            var inventory = Container();
+            for (short slot = 0; slot < inventory->Size; slot++)
+                if (inventory->GetInventorySlot(slot)->ItemId != 0) items.Add(ReadItem(slot));
+            return SaleListOrder.Sort(items, SaleListSlots);
+        }
+        catch (InvalidOperationException) { return Array.Empty<SaleItem>(); }
+    }
+
     public void ValidateSession(SaleItem item)
     {
         if (!framework.IsInFrameworkUpdateThread || framework.IsFrameworkUnloading)

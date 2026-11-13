@@ -7,10 +7,11 @@ using Dalamud.Interface.Windowing;
 namespace AutoMarketbuddy.Windows;
 
 public sealed class MainWindow(MarketSession session, Configuration configuration,
-    AutoRetainerHandoff autoRetainer, Action<bool> start, Action stop, Func<uint, string> itemName)
+    AutoRetainerHandoff autoRetainer, PriceChangeHistory history, Action<bool> start, Action stop,
+    Func<uint, string> itemName)
     : Window("Auto-Marketbuddy##AutoMarketbuddyMainWindow", ImGuiWindowFlags.None)
 {
-    private int lastResultCount;
+    private int lastHistoryCount;
     private int scrollFramesLeft;
 
     public override void PreDraw()
@@ -80,30 +81,39 @@ public sealed class MainWindow(MarketSession session, Configuration configuratio
         if (autoRetainer.IsBusy) ImGui.TextWrapped($"AutoRetainer: {autoRetainer.Status}");
 
         if (session.LastError.Length > 0) ImGui.TextWrapped($"Stopped: {session.LastError}");
-        if (session.Results.Count == 0) return;
+        if (history.Count == 0) return;
 
         ImGui.Separator();
-        if (!ImGui.BeginChild("##ResultsScroll", new Vector2(0, 0), false)) { ImGui.EndChild(); return; }
-        if (ImGui.BeginTable("##Results", 2, ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable))
+        ImGui.TextUnformatted($"Price changes ({history.Count})");
+        ImGui.SameLine();
+        ImGui.BeginDisabled(session.IsRunning);
+        if (ImGui.SmallButton("Clear")) history.Clear();
+        ImGui.EndDisabled();
+        if (!ImGui.BeginChild("##HistoryScroll", new Vector2(0, 0), false)) { ImGui.EndChild(); return; }
+        if (ImGui.BeginTable("##History", 3, ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable))
         {
             ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
             ImGui.TableSetupColumn("Price", ImGuiTableColumnFlags.WidthFixed, 170f);
+            ImGui.TableSetupColumn("Retainer", ImGuiTableColumnFlags.WidthFixed, 100f);
             ImGui.TableHeadersRow();
-            foreach (var result in session.Results)
+            // Appended in processing order, so each retainer reads top to bottom as it was shown.
+            foreach (var change in history.Changes)
             {
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(itemName(result.Item.ItemId) + (result.Item.IsHq ? " HQ" : ""));
+                ImGui.TextUnformatted(itemName(change.ItemId) + (change.IsHq ? " HQ" : ""));
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(result.ProposedPrice is uint proposed && proposed != result.Item.Price
-                    ? $"{result.Item.Price:N0} -> {proposed:N0}"
-                    : $"{result.Item.Price:N0}");
+                ImGui.TextUnformatted(change.ProposedPrice is uint proposed && proposed != change.PreviousPrice
+                    ? $"{change.PreviousPrice:N0} -> {proposed:N0}"
+                    : $"{change.PreviousPrice:N0}");
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(change.RetainerName);
             }
             ImGui.EndTable();
         }
-        if (session.Results.Count != lastResultCount)
+        if (history.Count != lastHistoryCount)
         {
-            lastResultCount = session.Results.Count;
+            lastHistoryCount = history.Count;
             scrollFramesLeft = 3;
         }
         // Anchor to the end for a few frames: the scroll range only grows

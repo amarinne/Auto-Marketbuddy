@@ -16,6 +16,11 @@ Open a retainer's sale list and run:
 
 Only existing listings change. Stop cannot undo a price the game has already accepted.
 
+The window also shows a price-change history for the current game session. It includes manual runs,
+AutoRetainer handoff runs, and price edits that you make in the retainer sale list. The history does
+not request market data. Rows follow the retainer sale list from top to bottom. Use Clear to remove
+the list.
+
 ## AutoRetainer
 
 Auto-Marketbuddy can run as an AutoRetainer post-process step. Choose the mode in the window

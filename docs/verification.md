@@ -2,7 +2,7 @@
 
 ## Offline acceptance
 
-Run `./scripts/check.sh`. The behavior checks compile the production pricing, comparison-capture, session, suppression, and AutoRetainer-handoff code directly, without Dalamud or a game process.
+Run `./scripts/check.sh`. The behavior checks compile the production pricing, comparison-capture, session, price-change history, suppression, and AutoRetainer-handoff code directly, without Dalamud or a game process.
 
 Checks cover quality and ownership filters, single subtraction, price bounds, complete responses, stale and conflicting data, Stop, restart, timeouts, changed listing identity, sequential acknowledgement, and AutoRetainer suppression ownership. Package checks read the assembly metadata without loading the plugin. They require `AutoMarketbuddy`, version `1.1.1.0`, and API 15 in the source manifest, package, and catalog.
 
@@ -11,6 +11,8 @@ Sale-history fallback checks cover the toggle off (leave unchanged, no history r
 Cache checks cover Preview-to-Apply reuse, duplicate listings in Preview, cross-retainer targeting, item/quality misses, refresh, five-minute expiry, expiry before confirmation, context changes, and Stop. Cache hits do not extend expiry or repeat the market comparison. Missing or expired entries use the normal in-game comparison path.
 
 AutoRetainer handoff checks cover the opt-in gate, one request per retainer pass, duplicate callbacks, a busy run, a mismatched retainer name, a missing retainer menu, a sale list that appears before its container is ready, a sale list that never opens, a retainer with no listings, Stop, mode-off during a run, AutoRetainer unload, request failure, release failure, disposal, and exactly one release. They also check retainer identity after list loading and disposal before AMB owns the handoff. Menu, list, and session waits after the handoff are bounded. A pending request waits for AutoRetainer's callback or an observable stop; the API has no cancellation endpoint. The fake market checks ordering and release counts; it does not prove the native `SelectString` callback, AutoRetainer's own task scheduling, or the live retainer menu.
+
+Price-change history checks cover one row for each observed change, no duplicate after a repeated observation or a later run, the AutoRetainer handoff path, retention across runs, preview records, and manual observation. Order checks compare the processing order with the sale list's displayed slot order and cover listings that the display list does not mention. They cannot prove that `AgentRetainer.SellListEntries` matches the live sale list; the owner test checks that.
 
 The adapter compiles against the selected installed Dalamud and FFXIVClientStructs assemblies. Compilation cannot establish that native signatures, event registrations, or server acknowledgement behave as expected in the game.
 
@@ -22,11 +24,12 @@ UI and chat commands enter the same queue. The framework drains that queue befor
 2. Build with `AMB_PACKAGE_DIR=/tmp/amb-owner-test ./scripts/check.sh`.
 3. Load that DLL through Dalamud's development-plugin mechanism in an owner-controlled session. Keep companion automation disabled.
 4. Open a retainer sale list with known HQ and NQ listings. Sort the list differently from inventory order.
-5. Run `/aundercut preview`. Check the reported slot, item, quality, current price, and proposed unit price against the game.
+5. Run `/aundercut preview`. Check the reported slot, item, quality, current price, and proposed unit price against the game. Check that the price-change rows follow the sale list from top to bottom.
 6. Confirm that preview leaves every listing price and quantity unchanged. Inspect the log for unsupported-control errors.
-7. Repeat preview and use Stop while waiting for comparison data. Close the control window during another preview.
-8. Close the sale list during preview. Verify that the run stops and does not operate on another retainer.
-9. Unload and reload the development plugin. Verify that one command and one update subscription remain active.
+7. Change one listing price by hand in the sale list. Check that one history row shows the old and new price and that a second observation does not add another row.
+8. Repeat preview and use Stop while waiting for comparison data. Close the control window during another preview.
+9. Close the sale list during preview. Verify that the run stops and does not operate on another retainer.
+10. Unload and reload the development plugin. Verify that one command and one update subscription remain active.
 
 Preview still opens native editors and comparison windows. Its control path never sets or confirms a price. Empty-market responses without a new offerings packet stop on timeout instead of trusting cached data.
 

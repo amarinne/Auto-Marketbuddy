@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opt in to AutoRetainer's retainer post-process handoff with the "During AutoRetainer" setting
   or `/amb autoretainer off|preview|apply`. AutoRetainer waits for one normal Auto-Marketbuddy
   run on the retainer, then continues to the next retainer.
+- Keep one price-change history for the current game session. It records manual runs, AutoRetainer
+  handoff runs, and manual edits in the retainer sale list. It does not request market data, and it
+  does not add the same observation twice.
+- Process and record listings in the retainer sale list's top-to-bottom order instead of inventory
+  slot order.
 
 ## [1.1.1] - 2026-11-08
 

@@ -30,6 +30,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly IDataManager data;
     private readonly Dictionary<uint, string> itemNames = new();
     private readonly Configuration configuration;
+    private readonly PriceChangeHistory priceHistory = new();
     private readonly WindowSystem windows = new("AutoMarketbuddy");
     private readonly MainWindow window;
     private readonly ConcurrentQueue<Control> controls = new();
@@ -56,7 +57,7 @@ public sealed class Plugin : IDalamudPlugin
         configuration = pluginInterface.GetPluginConfig() as Configuration ?? new();
         configuration.Initialize(pluginInterface);
         market = new(gameGui, clientState, playerState, objectTable, pluginInterface, marketBoard, framework, dataManager);
-        session = new(market);
+        session = new(market, priceHistory);
         autoRetainerIpc = new(pluginInterface);
         autoRetainer = new(session, market, autoRetainerIpc,
             () => new(configuration.AutoRetainerMode, configuration.UndercutAmount,
@@ -71,7 +72,7 @@ public sealed class Plugin : IDalamudPlugin
         diagnosticSnapshot = new(1, DateTimeOffset.UtcNow, typeof(Plugin).Assembly.GetName().Version!.ToString(), session.GetDiagnostics(Environment.TickCount64));
         diagnostics = pluginInterface.GetIpcProvider<string>(DiagnosticsSnapshot.Endpoint);
         diagnostics.RegisterFunc(() => JsonSerializer.Serialize(diagnosticSnapshot, DiagnosticJson));
-        window = new(session, configuration, autoRetainer, Start, Stop, ItemName);
+        window = new(session, configuration, autoRetainer, priceHistory, Start, Stop, ItemName);
         windows.AddWindow(window);
         pluginInterface.UiBuilder.Draw += Draw;
         pluginInterface.UiBuilder.OpenMainUi += Open;
@@ -196,6 +197,13 @@ public sealed class Plugin : IDalamudPlugin
             session.Update(now);
             // The handoff observes completion or failure after the session has advanced this frame.
             autoRetainer.Update(now);
+            // Outside a run, a listing price can change through manual edits or another plugin.
+            // Read the sell list only; this path never fetches market data or touches a price.
+            if (!session.IsRunning && market.ListReady)
+            {
+                var retainerName = market.SelectedRetainerName;
+                foreach (var listing in market.Snapshot()) priceHistory.Observe(listing, retainerName);
+            }
             if (wasRunning && !session.IsRunning && session.Status == "Completed" &&
                 configuration.ExitRetainerOnFinish && !autoRetainer.IsActive)
                 market.BeginRetainerExit();

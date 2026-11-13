@@ -24,6 +24,30 @@ public sealed record SessionDiagnostics(string RunId, bool IsRunning, string Mod
     long? QuoteAgeMs, string Confirmation, string LastError, SessionEvent[] Trace,
     string ComparisonSource = "None", int CachedItems = 0);
 
+public static class SaleListOrder
+{
+    // The game displays the retainer sale list in its own order, which differs from inventory
+    // slot order. Put the captured listings in that top-to-bottom order. Listings that the
+    // display list does not mention keep a deterministic slot order after it.
+    public static IReadOnlyList<SaleItem> Sort(IReadOnlyList<SaleItem> items, IReadOnlyList<short> slots)
+    {
+        if (items.Count < 2 || slots.Count == 0) return items;
+        var bySlot = new Dictionary<short, SaleItem>(items.Count);
+        foreach (var item in items) bySlot[item.Slot] = item;
+        var ordered = new List<SaleItem>(items.Count);
+        var placed = new HashSet<short>();
+        foreach (var slot in slots)
+            if (bySlot.TryGetValue(slot, out var item) && placed.Add(slot)) ordered.Add(item);
+        if (ordered.Count == items.Count) return ordered;
+        var rest = new List<SaleItem>();
+        foreach (var item in items)
+            if (!placed.Contains(item.Slot)) rest.Add(item);
+        rest.Sort((left, right) => left.Slot.CompareTo(right.Slot));
+        ordered.AddRange(rest);
+        return ordered;
+    }
+}
+
 public static class Pricing
 {
     public const uint MaximumPrice = 999_999_999;
@@ -88,6 +112,7 @@ public interface IRetainerMarket
     void BeginRun();
     void EndRun();
     IReadOnlyList<SaleItem> Capture();
+    IReadOnlyList<short> SaleListSlots { get; }
     IReadOnlySet<ulong> OwnRetainers { get; }
     bool ListVisible { get; }
     bool ListReady { get; }
@@ -110,7 +135,7 @@ public interface IRetainerMarket
     void CancelOwnedEditor();
 }
 
-public sealed class MarketSession(IRetainerMarket market) : IDisposable
+public sealed class MarketSession(IRetainerMarket market, PriceChangeHistory? priceHistory = null) : IDisposable
 {
     public const long CacheLifetimeMillis = 5 * 60 * 1000;
     private sealed record CachedComparison(MarketListing[] Listings, HistorySale[] History, long CapturedAt);
@@ -225,6 +250,10 @@ public sealed class MarketSession(IRetainerMarket market) : IDisposable
             if (items.Any(x => x.CharacterId != first.CharacterId || x.WorldId != first.WorldId ||
                     x.RetainerId != first.RetainerId))
                 throw new InvalidOperationException("The retainer changed during capture.");
+            // Process and record in the order the game shows the sale list, top row first.
+            items = SaleListOrder.Sort(items, market.SaleListSlots);
+            var retainerName = market.SelectedRetainerName;
+            foreach (var item in items) priceHistory?.Observe(item, retainerName);
             ObserveContext(first.CharacterId, first.WorldId);
             ExpireCache(now);
             if (!apply)
@@ -308,6 +337,7 @@ public sealed class MarketSession(IRetainerMarket market) : IDisposable
                     if (actual.Price != target || !market.EditorClosed) return;
                     confirmation = "Local price verified; server persistence is not proven";
                     Record($"Local listing now matches {target} gil.");
+                    priceHistory?.Report(item, market.SelectedRetainerName, target, applied: true);
                     results.Add(new(item, target, "Local price verified"));
                     resultSnapshot = results.ToArray();
                     Move(Step.WaitClosed, now);
@@ -335,6 +365,7 @@ public sealed class MarketSession(IRetainerMarket market) : IDisposable
             $"{decision.Evidence.Eligible}/{decision.Evidence.Received} eligible. {decision.Reason}");
         if (!apply || decision.Price == null)
         {
+            priceHistory?.Report(item, market.SelectedRetainerName, decision.Price, applied: false);
             results.Add(new(item, decision.Price, decision.Price == null ? decision.Reason : "Preview only"));
             resultSnapshot = results.ToArray();
             market.CancelOwnedEditor();

@@ -1056,6 +1056,109 @@ Check("AutoRetainer verifies its retainer again before starting the loaded list"
         Equal(1, f.Ipc.Finishes);
     }
 });
+Check("price history records one row for each observed change and no duplicate", () =>
+{
+    var history = new PriceChangeHistory();
+    Equal(false, history.Observe(item, "Retainer"));
+    Equal(0, history.Count);
+    Equal(true, history.Observe(item with { Price = 1791 }, "Retainer"));
+    Equal(1, history.Count);
+    Equal(1000U, history.Changes[0].PreviousPrice);
+    Equal<uint?>(1791, history.Changes[0].ProposedPrice);
+    Equal("Retainer", history.Changes[0].RetainerName);
+    Equal(false, history.Observe(item with { Price = 1791 }, "Retainer"));
+    Equal(1, history.Count);
+
+    var preview = new PriceChangeHistory();
+    Equal(true, preview.Report(item, "Retainer", 900, applied: false));
+    Equal(false, preview.Report(item, "Retainer", 900, applied: false));
+    Equal(1, preview.Count);
+    Equal<uint?>(900, preview.Changes[0].ProposedPrice);
+    // A preview does not change the listing, so a manual move to 900 is still one new change.
+    Equal(true, preview.Observe(item with { Price = 900 }, "Retainer"));
+    Equal(2, preview.Count);
+    Equal(1000U, preview.Changes[1].PreviousPrice);
+    Equal<uint?>(900, preview.Changes[1].ProposedPrice);
+    // The applied result moves the baseline, so a later observation is not a second record.
+    Equal(true, preview.Report(item with { Price = 900 }, "Retainer", 899, applied: true));
+    Equal(3, preview.Count);
+    Equal(false, preview.Observe(item with { Price = 899 }, "Retainer"));
+    Equal(3, preview.Count);
+
+    // Preview and the same verified apply are one row, and observation stays quiet.
+    var applied = new PriceChangeHistory();
+    Equal(true, applied.Report(item, "Retainer", 900, applied: false));
+    Equal(false, applied.Report(item, "Retainer", 900, applied: true));
+    Equal(false, applied.Observe(item with { Price = 900 }, "Retainer"));
+    Equal(1, applied.Count);
+});
+Check("AutoRetainer handoff writes price changes to the shared history", () =>
+{
+    var game = Fake();
+    var history = new PriceChangeHistory();
+    using var f = new HandoffFixture(game, AutoRetainerMode.Apply, history);
+    f.Ipc.Step("Retainer");
+    f.Handoff.ReadyToPostprocess("Retainer", 0);
+    f.Handoff.Update(0);
+    f.Handoff.Update(0);
+    for (var n = 1; n <= 4; n++) f.Tick(n * 500L);
+    game.Acknowledge();
+    for (var n = 5; n <= 10; n++) f.Tick(n * 500L);
+    Equal("Completed", f.Session.Status);
+    Equal(1, history.Count);
+    Equal(1000U, history.Changes[0].PreviousPrice);
+    Equal<uint?>(899, history.Changes[0].ProposedPrice);
+    Equal("Retainer", history.Changes[0].RetainerName);
+    // The normal read-only observation after the run must not repeat the same change.
+    Equal(false, history.Observe(item with { Price = 899 }, "Retainer"));
+    Equal(1, history.Count);
+
+    // A later run keeps the earlier row and appends in processing order.
+    game.Item = item with { RetainerId = 31, Slot = 3, Quantity = 8, Price = 1200 };
+    f.Session.Start(true, 1, 500, 6000);
+    for (var n = 13; n <= 20; n++) f.Tick(n * 500L);
+    game.Acknowledge();
+    for (var n = 21; n <= 30; n++) f.Tick(n * 500L);
+    Equal(2, history.Count);
+    Equal(1200U, history.Changes[1].PreviousPrice);
+    Equal<uint?>(899, history.Changes[1].ProposedPrice);
+});
+Check("processing and history follow the sale list's displayed order", () =>
+{
+    var top = item with { Slot = 9, Quantity = 1, Price = 5000 };
+    var middle = item with { Slot = 2, Quantity = 2, Price = 5100 };
+    var bottom = item with { Slot = 5, Quantity = 3, Price = 5200 };
+    var game = new FakeMarket(top, new[] { Listing(900) })
+    {
+        // Inventory order differs from the order that the game shows in the sale list.
+        Snapshot = new[] { middle, top, bottom },
+        Inventory = new() { [top.Slot] = top, [middle.Slot] = middle, [bottom.Slot] = bottom },
+        SaleListSlots = new short[] { 5, 9, 2 },
+    };
+    var history = new PriceChangeHistory();
+    using var session = new MarketSession(game, history);
+    session.Start(false, 1, 500, 0);
+    for (var n = 1; n < 40; n++) session.Update(n * 500L);
+    Equal("5,9,2", string.Join(',', game.OpenedSlots));
+    Equal("5,9,2", string.Join(',', session.Results.Select(x => x.Item.Slot)));
+    Equal("5,9,2", string.Join(',', history.Changes.Select(x => x.Slot)));
+});
+Check("listings missing from the displayed order stay last in slot order", () =>
+{
+    var first = item with { Slot = 9, Quantity = 1 };
+    var second = item with { Slot = 2, Quantity = 2 };
+    var third = item with { Slot = 5, Quantity = 3 };
+    var game = new FakeMarket(first, new[] { Listing(900) })
+    {
+        Snapshot = new[] { first, second, third },
+        Inventory = new() { [first.Slot] = first, [second.Slot] = second, [third.Slot] = third },
+        SaleListSlots = new short[] { 5 },
+    };
+    using var session = new MarketSession(game);
+    session.Start(false, 1, 500, 0);
+    for (var n = 1; n < 40; n++) session.Update(n * 500L);
+    Equal("5,2,9", string.Join(',', game.OpenedSlots));
+});
 Console.WriteLine($"{count} behavior checks passed.");
 
 if (args.Length == 2)
@@ -1147,6 +1250,7 @@ sealed class FakeMarket(SaleItem item, IReadOnlyList<MarketListing> listings) : 
         MenuReady = true;
     }
     public IReadOnlyList<SaleItem> Capture() => Snapshot ?? new[] { Item };
+    public IReadOnlyList<short> SaleListSlots { get; set; } = Array.Empty<short>();
     public void ValidateSession(SaleItem target)
     {
         if (!SessionValid) throw new InvalidOperationException("Session changed");
@@ -1207,10 +1311,10 @@ sealed class HandoffFixture : IDisposable
     public readonly List<string> Errors = new();
     public AutoRetainerSettings Settings;
 
-    public HandoffFixture(FakeMarket game, AutoRetainerMode mode)
+    public HandoffFixture(FakeMarket game, AutoRetainerMode mode, PriceChangeHistory? history = null)
     {
         Game = game;
-        Session = new MarketSession(game);
+        Session = new MarketSession(game, history);
         Settings = new AutoRetainerSettings(mode, 1, 500, false);
         Handoff = new AutoRetainerHandoff(Session, game, Ipc, () => Settings, () => true,
             message => Logs.Add(message), message => Errors.Add(message));
