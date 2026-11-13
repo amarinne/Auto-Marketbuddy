@@ -1397,12 +1397,12 @@ Check("identical listing transitions merge into one row with a count", () =>
     for (short slot = 0; slot < 6; slot++)
     {
         var listing = item with { Slot = slot, Price = 1791 };
-        history.Observe(listing, "Vires");
-        history.Report(listing, "Vires", 1788, applied: false);
+        history.Observe(listing, "Retainer");
+        history.Report(listing, "Retainer", 1788, applied: false);
     }
     var other = item with { Slot = 6, Price = 1791 };
-    history.Observe(other, "Vires");
-    history.Report(other, "Vires", 1600, applied: false);
+    history.Observe(other, "Retainer");
+    history.Report(other, "Retainer", 1600, applied: false);
     var rows = PriceChangeTable.Build(history.Rows);
     Equal(2, rows.Count);
     Equal(6, rows[0].Count);
@@ -1415,11 +1415,11 @@ Check("identical listing transitions merge into one row with a count", () =>
 Check("a confirmed proposal updates the same row in place", () =>
 {
     var history = new PriceChangeHistory();
-    Equal(PriceObservation.Baseline, history.Observe(item, "Vires"));
-    Equal(true, history.Report(item, "Vires", 1788, applied: false));
+    Equal(PriceObservation.Baseline, history.Observe(item, "Retainer"));
+    Equal(true, history.Report(item, "Retainer", 1788, applied: false));
     Equal(1, history.Count);
     Equal(PriceChangeKind.Proposal, history.Changes[0].Kind);
-    Equal(PriceObservation.Changed, history.Observe(item with { Price = 1788 }, "Vires", confirmed: true));
+    Equal(PriceObservation.Changed, history.Observe(item with { Price = 1788 }, "Retainer", confirmed: true));
     Equal(1, history.Count);
     Equal(PriceChangeKind.Applied, history.Changes[0].Kind);
     var rows = PriceChangeTable.Build(history.Rows);
@@ -1427,7 +1427,7 @@ Check("a confirmed proposal updates the same row in place", () =>
     Equal(PriceChangeKind.Applied, rows[0].Kind);
     Equal<uint?>(1000, rows[0].PreviousPrice);
     Equal(1788U, rows[0].Price);
-    Equal(PriceObservation.None, history.Observe(item with { Price = 1788 }, "Vires", confirmed: true));
+    Equal(PriceObservation.None, history.Observe(item with { Price = 1788 }, "Retainer", confirmed: true));
     Equal(1, history.Count);
 
     // The manual watcher also keeps one row when the confirm click and the proposal agree.

@@ -8,7 +8,7 @@ trap 'rm -rf -- "$work"' EXIT
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_GENERATE_ASPNET_CERTIFICATE=false
 export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.local/share/dotnet}"
 export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-$HOME/.local/share/dotnet-cli}" NUGET_PACKAGES="${NUGET_PACKAGES:-$HOME/.nuget/packages}"
-export DALAMUD_HOME="${DALAMUD_HOME:-$HOME/.xlcore/dalamud/Hooks/15.0.3.9}"
+export DALAMUD_HOME="${DALAMUD_HOME:-$HOME/.xlcore/dalamud/Hooks/15.0.4.0}"
 if [[ ! -f "$DALAMUD_HOME/Dalamud.dll" || ! -f "$DALAMUD_HOME/FFXIVClientStructs.dll" ]]; then
     echo 'Set DALAMUD_HOME to the installed API 15 reference directory.' >&2
     exit 1
