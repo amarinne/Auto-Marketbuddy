@@ -81,10 +81,11 @@ public sealed class MainWindow(MarketSession session, Configuration configuratio
         if (autoRetainer.IsBusy) ImGui.TextWrapped($"AutoRetainer: {autoRetainer.Status}");
 
         if (session.LastError.Length > 0) ImGui.TextWrapped($"Stopped: {session.LastError}");
-        if (history.Count == 0) return;
+        var rows = PriceChangeTable.Build(history.Rows);
+        if (rows.Count == 0) return;
 
         ImGui.Separator();
-        ImGui.TextUnformatted($"Price changes ({history.Count})");
+        ImGui.TextUnformatted($"Price changes ({rows.Count})");
         ImGui.SameLine();
         ImGui.BeginDisabled(session.IsRunning);
         if (ImGui.SmallButton("Clear")) history.Clear();
@@ -96,24 +97,34 @@ public sealed class MainWindow(MarketSession session, Configuration configuratio
             ImGui.TableSetupColumn("Price", ImGuiTableColumnFlags.WidthFixed, 170f);
             ImGui.TableSetupColumn("Retainer", ImGuiTableColumnFlags.WidthFixed, 100f);
             ImGui.TableHeadersRow();
-            // Appended in processing order, so each retainer reads top to bottom as it was shown.
-            foreach (var change in history.Changes)
+            // First-seen order follows the sale list from top to bottom. Identical rows merge.
+            foreach (var row in rows)
             {
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(itemName(change.ItemId) + (change.IsHq ? " HQ" : ""));
+                ImGui.TextUnformatted(itemName(row.ItemId) + (row.IsHq ? " HQ" : "") +
+                    (row.Count > 1 ? $" ×{row.Count}" : ""));
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(change.ProposedPrice is uint proposed && proposed != change.PreviousPrice
-                    ? $"{change.PreviousPrice:N0} -> {proposed:N0}"
-                    : $"{change.PreviousPrice:N0}");
+                var price = row.PreviousPrice is uint previous
+                    ? $"{previous:N0} -> {row.Price:N0}"
+                    : $"{row.Price:N0}";
+                if (row.Kind == PriceChangeKind.Proposal)
+                {
+                    ImGui.TextDisabled(price);
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("Proposed, not applied.");
+                }
+                else
+                {
+                    ImGui.TextUnformatted(price);
+                }
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(change.RetainerName);
+                ImGui.TextUnformatted(row.RetainerName);
             }
             ImGui.EndTable();
         }
-        if (history.Count != lastHistoryCount)
+        if (rows.Count != lastHistoryCount)
         {
-            lastHistoryCount = history.Count;
+            lastHistoryCount = rows.Count;
             scrollFramesLeft = 3;
         }
         // Anchor to the end for a few frames: the scroll range only grows

@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Process and record listings in the retainer sale list's top-to-bottom order instead of inventory
   slot order.
 - Write one Information line to the Dalamud log for each new price baseline and each new history row.
+- Capture the market comparison when you use Compare Prices in the retainer price editor. The
+  comparison and its proposed price appear before you confirm anything. A later run for the same
+  item and quality reuses that comparison instead of fetching it again.
+- Show every observed listing in the price table, including listings that did not change. Rows
+  with the same retainer, item, quality, and price text merge into one row with a count. A proposed
+  price is dim and has a tooltip; a confirmed price updates the same row.
 
 ### Fixed
 - Record a price that you change by hand in the retainer sale list. The watcher reads the price

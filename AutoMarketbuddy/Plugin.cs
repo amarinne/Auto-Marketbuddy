@@ -63,7 +63,6 @@ public sealed class Plugin : IDalamudPlugin
         priceHistory = new(message => log.Information(message));
         market = new(gameGui, clientState, playerState, objectTable, pluginInterface, marketBoard, framework, dataManager, addonLifecycle);
         session = new(market, priceHistory);
-        manualWatch = new(market, priceHistory);
         autoRetainerIpc = new(pluginInterface);
         autoRetainer = new(session, market, autoRetainerIpc,
             () => new(configuration.AutoRetainerMode, configuration.UndercutAmount,
@@ -75,6 +74,11 @@ public sealed class Plugin : IDalamudPlugin
                 log.Warning(message);
                 chat.PrintError($"[Auto-Marketbuddy] {message}");
             });
+        // The passive watcher also captures a manual market comparison. It is inactive while a run
+        // or the AutoRetainer handoff owns the windows and the packet queue.
+        manualWatch = new(market, priceHistory, session, () => configuration.UndercutAmount,
+            message => log.Information(message),
+            () => !session.IsRunning && !autoRetainer.IsBusy);
         diagnosticSnapshot = new(1, DateTimeOffset.UtcNow, typeof(Plugin).Assembly.GetName().Version!.ToString(), session.GetDiagnostics(Environment.TickCount64));
         diagnostics = pluginInterface.GetIpcProvider<string>(DiagnosticsSnapshot.Endpoint);
         diagnostics.RegisterFunc(() => JsonSerializer.Serialize(diagnosticSnapshot, DiagnosticJson));
@@ -204,9 +208,10 @@ public sealed class Plugin : IDalamudPlugin
             // The handoff observes completion or failure after the session has advanced this frame.
             autoRetainer.Update(now);
             // Outside a run, a listing price can change through manual edits or another plugin.
-            // The watcher reads the sale list and its price editor only; this path never fetches
-            // market data, sets a price, or confirms one.
-            if (!session.IsRunning) manualWatch.Update(now);
+            // The watcher reads the sale list, its price editor, and a manual market comparison
+            // only; this path never fetches market data, sets a price, or confirms one. It is
+            // inactive while a run or AutoRetainer handoff owns the windows.
+            manualWatch.Update(now);
             if (wasRunning && !session.IsRunning && session.Status == "Completed" &&
                 configuration.ExitRetainerOnFinish && !autoRetainer.IsActive)
                 market.BeginRetainerExit();

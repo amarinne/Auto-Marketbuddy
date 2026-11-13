@@ -17,10 +17,13 @@ Open a retainer's sale list and run:
 Only existing listings change. Stop cannot undo a price the game has already accepted. An item with no
 competing listing of its quality keeps its price, and the run continues to the next item.
 
-The window also shows a price-change history for the current game session. It includes manual runs,
-AutoRetainer handoff runs, and price edits that you make in the retainer sale list. The history does
-not request market data. Rows follow the retainer sale list from top to bottom. Use Clear to remove
-the list. Each new baseline and each new row also adds one Information line to the Dalamud log.
+The window also shows a price table for the current game session. It includes manual runs,
+AutoRetainer handoff runs, price edits that you make in the retainer sale list, and market
+comparisons that you open in the price editor. The table does not request market data. It shows
+each observed listing, including listings that did not change. Rows follow the retainer sale list
+from top to bottom. Identical rows merge with a count. A proposed price is dim and has a tooltip.
+Use Clear to remove the list. Each new baseline, each new row, and each captured comparison also
+adds one Information line to the Dalamud log.
 
 ## AutoRetainer
 

@@ -32,6 +32,11 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
     private readonly IAddonLifecycle addonLifecycle;
     private readonly ConcurrentQueue<Packet> packets = new();
     private readonly ConcurrentQueue<HistoryPacket> historyPackets = new();
+    // The passive watcher reads this queue. A run never touches it, so observation cannot take a
+    // run's packets or clear them.
+    private readonly ConcurrentQueue<Packet> manualPackets = new();
+    private ComparisonCapture? manualComparison;
+    private long manualStartedAt;
     // Marketbuddy exposes this lock so other plugins can drive the retainer
     // windows without its auto-open, paste, and click-to-set handlers firing.
     private const string MarketbuddyLockToken = "AutoMarketbuddy";
@@ -174,6 +179,7 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
     // Read-only. The sale list hides its price editor for manual edits, and other plugins can open
     // the same editor, so the watcher reads this state and never operates it.
     public bool PriceEditorOpen => Ready((AtkUnitBase*)Editor);
+    public bool ComparisonWindowOpen => Ready(Addon("ItemSearchResult"));
 
     // The last price confirmation that the game reported for the retainer price editor. It is the
     // direct signal for a manual change when the game has not yet exposed the new listing price.
@@ -446,9 +452,12 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
     private void OnOfferings(IMarketBoardCurrentOfferings offerings)
     {
         // The event can run off the framework thread. Copy data only; never access game pointers here.
-        packets.Enqueue(new(offerings.RequestId, offerings.ItemListings.Select(x =>
-            (x.ListingId, new MarketListing(x.ItemId, x.IsHq, x.RetainerId, x.PricePerUnit, x.OnMannequin))).ToArray()));
+        var packet = new Packet(offerings.RequestId, offerings.ItemListings.Select(x =>
+            (x.ListingId, new MarketListing(x.ItemId, x.IsHq, x.RetainerId, x.PricePerUnit, x.OnMannequin))).ToArray());
+        packets.Enqueue(packet);
+        manualPackets.Enqueue(packet);
         while (packets.Count > 20) packets.TryDequeue(out _);
+        while (manualPackets.Count > 20) manualPackets.TryDequeue(out _);
     }
 
     private void OnHistory(IMarketBoardHistory history)
@@ -500,6 +509,44 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
             searchWindowAt, requestIssued)
             ? Array.Empty<MarketListing>()
             : null;
+    }
+
+    public void BeginManualComparison(SaleItem item)
+    {
+        manualPackets.Clear();
+        manualComparison = new(item.ItemId);
+        manualStartedAt = Environment.TickCount64;
+    }
+
+    public ManualComparison? ReadManualComparison(SaleItem item)
+    {
+        if (manualComparison == null || !ComparisonWindowOpen) return null;
+        try
+        {
+            while (manualPackets.TryDequeue(out var packet))
+                manualComparison.Add(packet.RequestId, packet.Listings);
+            var proxy = InfoProxyItemSearch.Instance();
+            if (proxy == null || proxy->SearchItemId != item.ItemId) return null;
+            return manualComparison.Complete(proxy->SearchItemId, proxy->ListingCount) is { } listings
+                ? new ManualComparison(listings.ToArray(), manualStartedAt)
+                : null;
+        }
+        catch (InvalidOperationException)
+        {
+            // A replaced window or a conflicting packet starts a new passive comparison. The
+            // passive path stays quiet; it does not stop a run or change a price.
+            manualComparison = new(item.ItemId);
+            manualPackets.Clear();
+            manualStartedAt = Environment.TickCount64;
+            return null;
+        }
+    }
+
+    public void EndManualComparison()
+    {
+        manualComparison = null;
+        manualPackets.Clear();
+        manualStartedAt = 0;
     }
 
     private void CloseComparison()
@@ -593,5 +640,7 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
         board.HistoryReceived -= OnHistory;
         packets.Clear();
         historyPackets.Clear();
+        manualPackets.Clear();
+        manualComparison = null;
     }
 }

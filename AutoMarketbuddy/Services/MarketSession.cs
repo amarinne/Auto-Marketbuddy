@@ -120,8 +120,14 @@ public interface IRetainerMarket
     bool ListReady { get; }
     // The retainer price editor is open. Read-only: the watcher never operates the editor.
     bool PriceEditorOpen { get; }
+    // The market result window (ItemSearchResult) is open. Read-only.
+    bool ComparisonWindowOpen { get; }
     // The listing that the open price editor changes, with its price before the edit.
     SaleItem? EditedListing { get; }
+    // Start, read, and end a passive comparison. It uses a separate packet queue from a run.
+    void BeginManualComparison(SaleItem item);
+    ManualComparison? ReadManualComparison(SaleItem item);
+    void EndManualComparison();
     // The last price confirmation that the game reported for that editor, with its time.
     (short Slot, uint Price, long At)? ConfirmedEdit { get; }
     bool HasListings { get; }
@@ -146,7 +152,8 @@ public interface IRetainerMarket
 public sealed class MarketSession(IRetainerMarket market, PriceChangeHistory? priceHistory = null) : IDisposable
 {
     public const long CacheLifetimeMillis = 5 * 60 * 1000;
-    private sealed record CachedComparison(MarketListing[] Listings, HistorySale[] History, long CapturedAt);
+    private sealed record CachedComparison(MarketListing[] Listings, HistorySale[] History, long CapturedAt,
+        bool Manual = false);
     private readonly Dictionary<(uint ItemId, bool IsHq), CachedComparison> cache = new();
     private ulong cacheCharacter;
     private uint cacheWorld;
@@ -194,6 +201,20 @@ public sealed class MarketSession(IRetainerMarket market, PriceChangeHistory? pr
         foreach (var key in cache.Where(x => now < x.Value.CapturedAt ||
                      now - x.Value.CapturedAt >= CacheLifetimeMillis).Select(x => x.Key).ToArray())
             cache.Remove(key);
+    }
+
+    // A comparison seen while the owner used the price editor is reusable by a later run. An
+    // empty market is never stored: it has no listings and no sale history, so the run must use
+    // its normal empty-market path.
+    public bool OfferManualComparison(SaleItem item, IReadOnlyList<MarketListing> listings,
+        long capturedAt, long now)
+    {
+        if (listings.Count == 0 || capturedAt <= 0 || capturedAt > now) return false;
+        ObserveContext(item.CharacterId, item.WorldId);
+        ExpireCache(now);
+        cache[(item.ItemId, item.IsHq)] = new CachedComparison(listings.ToArray(),
+            Array.Empty<HistorySale>(), capturedAt, Manual: true);
+        return true;
     }
 
     // This copies managed state only. Reading diagnostics cannot advance a run or touch the game.
@@ -264,8 +285,12 @@ public sealed class MarketSession(IRetainerMarket market, PriceChangeHistory? pr
             foreach (var item in items) priceHistory?.Observe(item, retainerName);
             ObserveContext(first.CharacterId, first.WorldId);
             ExpireCache(now);
+            // A new Preview refreshes comparisons that earlier runs captured. A comparison the
+            // owner captured by hand is fresh and stays reusable until it expires.
             if (!apply)
-                foreach (var item in items) cache.Remove((item.ItemId, item.IsHq));
+                foreach (var item in items)
+                    if (cache.TryGetValue((item.ItemId, item.IsHq), out var entry) && !entry.Manual)
+                        cache.Remove((item.ItemId, item.IsHq));
             delay = Math.Clamp(waitDelayMillis, 250, 5000);
             index = 0;
             Move(Step.Open, now);

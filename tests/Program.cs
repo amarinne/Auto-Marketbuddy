@@ -1299,6 +1299,157 @@ Check("a stale same-item search does not prove an empty market", () =>
     Equal(0, game.ConfirmCalls);
     if (!session.LastError.Contains("Timed out")) throw new Exception(session.LastError);
 });
+Check("a manual comparison records a proposal and a later run reuses its cache", () =>
+{
+    var game = Fake();
+    game.SellListOpen = true;
+    game.EditorOpen = true;
+    game.Edited = item;
+    game.ComparisonWindowOpen = true;
+    game.Manual = new ManualComparison(new[] { Listing(1789) }, 1_500);
+    var lines = new List<string>();
+    var history = new PriceChangeHistory(lines.Add);
+    using var session = new MarketSession(game, history);
+    var watch = new ManualPriceWatch(game, history, session, () => 1, lines.Add,
+        () => !session.IsRunning);
+    watch.Update(2_000);
+    Equal(1, history.Count);
+    Equal(1000U, history.Changes[0].PreviousPrice);
+    Equal<uint?>(1788, history.Changes[0].ProposedPrice);
+    Equal(PriceChangeKind.Proposal, history.Changes[0].Kind);
+    Equal(1, session.CachedItemCount);
+    if (!lines.Any(x => x.StartsWith("Comparison captured:") && x.Contains("item 42") &&
+            x.Contains("1 competing") && x.Contains("1789")))
+        throw new Exception(string.Join('|', lines));
+
+    // The owner closes the editor without a confirmation. A later Preview or Apply run uses the
+    // cache and needs no new comparison.
+    game.EditorOpen = false;
+    game.ComparisonWindowOpen = false;
+    session.Start(false, 1, 500, 3_000);
+    for (var n = 7; n <= 12; n++) session.Update(n * 500L);
+    Equal(0, game.CompareCalls);
+    Equal(1, session.Results.Count);
+    Equal<uint?>(1788, session.Results[0].ProposedPrice);
+    session.Start(true, 1, 500, 7_000);
+    for (var n = 15; n <= 18; n++) session.Update(n * 500L);
+    Equal(0, game.CompareCalls);
+    Equal(1, game.ConfirmCalls);
+    Equal(1788U, game.Proposed);
+    game.Acknowledge();
+    session.Update(9_500);
+    session.Update(10_000);
+    Equal(1, history.Count);
+    Equal(PriceChangeKind.Applied, history.Changes[0].Kind);
+    Equal(1, PriceChangeTable.Build(history.Rows).Count);
+});
+Check("an empty passive comparison is not cached", () =>
+{
+    var game = Fake();
+    game.SellListOpen = true;
+    game.EditorOpen = true;
+    game.Edited = item;
+    game.ComparisonWindowOpen = true;
+    game.Manual = new ManualComparison(Array.Empty<MarketListing>(), 1_000);
+    var history = new PriceChangeHistory();
+    using var session = new MarketSession(game, history);
+    var watch = new ManualPriceWatch(game, history, session, () => 1);
+    watch.Update(2_000);
+    Equal(0, session.CachedItemCount);
+    Equal(0, history.Count);
+});
+Check("the passive path stays inactive while a run is active", () =>
+{
+    var game = Fake();
+    game.SellListOpen = true;
+    game.EditorOpen = true;
+    game.Edited = item;
+    game.ComparisonWindowOpen = true;
+    game.Manual = new ManualComparison(new[] { Listing(900) }, 0);
+    var history = new PriceChangeHistory();
+    using var session = new MarketSession(game, history);
+    session.Start(false, 1, 500, 0);
+    var watch = new ManualPriceWatch(game, history, session, () => 1, null,
+        () => !session.IsRunning);
+    watch.Update(1_000);
+    Equal(0, game.ManualBegins);
+    Equal(0, game.ManualReads);
+    Equal(0, history.Count);
+    Equal(true, session.IsRunning);
+});
+Check("unchanged listings appear in the table with their price", () =>
+{
+    var game = Fake();
+    game.SellListOpen = true;
+    var history = new PriceChangeHistory();
+    var watch = new ManualPriceWatch(game, history);
+    watch.Update(100);
+    var rows = PriceChangeTable.Build(history.Rows);
+    Equal(1, rows.Count);
+    Equal(1000U, rows[0].Price);
+    Equal<uint?>(null, rows[0].PreviousPrice);
+    Equal(PriceChangeKind.Baseline, rows[0].Kind);
+    Equal(1, rows[0].Count);
+});
+Check("identical listing transitions merge into one row with a count", () =>
+{
+    var history = new PriceChangeHistory();
+    for (short slot = 0; slot < 6; slot++)
+    {
+        var listing = item with { Slot = slot, Price = 1791 };
+        history.Observe(listing, "Vires");
+        history.Report(listing, "Vires", 1788, applied: false);
+    }
+    var other = item with { Slot = 6, Price = 1791 };
+    history.Observe(other, "Vires");
+    history.Report(other, "Vires", 1600, applied: false);
+    var rows = PriceChangeTable.Build(history.Rows);
+    Equal(2, rows.Count);
+    Equal(6, rows[0].Count);
+    Equal<uint?>(1791, rows[0].PreviousPrice);
+    Equal(1788U, rows[0].Price);
+    Equal(PriceChangeKind.Proposal, rows[0].Kind);
+    Equal(1, rows[1].Count);
+    Equal(1600U, rows[1].Price);
+});
+Check("a confirmed proposal updates the same row in place", () =>
+{
+    var history = new PriceChangeHistory();
+    Equal(PriceObservation.Baseline, history.Observe(item, "Vires"));
+    Equal(true, history.Report(item, "Vires", 1788, applied: false));
+    Equal(1, history.Count);
+    Equal(PriceChangeKind.Proposal, history.Changes[0].Kind);
+    Equal(PriceObservation.Changed, history.Observe(item with { Price = 1788 }, "Vires", confirmed: true));
+    Equal(1, history.Count);
+    Equal(PriceChangeKind.Applied, history.Changes[0].Kind);
+    var rows = PriceChangeTable.Build(history.Rows);
+    Equal(1, rows.Count);
+    Equal(PriceChangeKind.Applied, rows[0].Kind);
+    Equal<uint?>(1000, rows[0].PreviousPrice);
+    Equal(1788U, rows[0].Price);
+    Equal(PriceObservation.None, history.Observe(item with { Price = 1788 }, "Vires", confirmed: true));
+    Equal(1, history.Count);
+
+    // The manual watcher also keeps one row when the confirm click and the proposal agree.
+    var game = Fake();
+    game.SellListOpen = true;
+    game.EditorOpen = true;
+    game.Edited = item;
+    game.ComparisonWindowOpen = true;
+    game.Manual = new ManualComparison(new[] { Listing(1789) }, 1_000);
+    var watchHistory = new PriceChangeHistory();
+    using var session = new MarketSession(game, watchHistory);
+    var watch = new ManualPriceWatch(game, watchHistory, session, () => 1);
+    watch.Update(1_500);
+    Equal(1, watchHistory.Count);
+    Equal(PriceChangeKind.Proposal, watchHistory.Changes[0].Kind);
+    game.Confirmed = (item.Slot, 1788, 1_600);
+    game.EditorOpen = false;
+    game.ComparisonWindowOpen = false;
+    watch.Update(1_700);
+    Equal(1, watchHistory.Count);
+    Equal(PriceChangeKind.Applied, watchHistory.Changes[0].Kind);
+});
 Console.WriteLine($"{count} behavior checks passed.");
 
 if (args.Length == 2)
@@ -1372,6 +1523,13 @@ sealed class FakeMarket(SaleItem item, IReadOnlyList<MarketListing> listings) : 
     public bool EditorOpen;
     public SaleItem? Edited;
     public bool SaleListHidden;
+    // Passive comparison state. The fake exposes one captured result so the watcher can read it
+    // without a real result window.
+    public bool ComparisonWindowOpen { get; set; }
+    public ManualComparison? Manual;
+    public int ManualBegins;
+    public int ManualReads;
+    public int ManualEnds;
     // An item with no competing listing sends no offerings packet; the search window and a new
     // request id are the only positive signals. EmptyRequestIssued models a stale proxy state.
     public HashSet<uint> EmptyItems = new();
@@ -1384,6 +1542,9 @@ sealed class FakeMarket(SaleItem item, IReadOnlyList<MarketListing> listings) : 
     public IReadOnlySet<ulong> OwnRetainers { get; } = new HashSet<ulong> { 30, 31 };
     public bool ListVisible => SellListOpen && !SaleListHidden;
     public bool PriceEditorOpen => EditorOpen;
+    public void BeginManualComparison(SaleItem target) { ManualBegins++; ManualEnds = 0; }
+    public ManualComparison? ReadManualComparison(SaleItem target) { ManualReads++; return Manual; }
+    public void EndManualComparison() { ManualEnds++; }
     public SaleItem? EditedListing => EditorOpen ? Edited : null;
     public (short Slot, uint Price, long At)? ConfirmedEdit => Confirmed;
     public (short Slot, uint Price, long At)? Confirmed;
