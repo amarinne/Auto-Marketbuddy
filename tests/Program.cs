@@ -1504,7 +1504,7 @@ if (args.Length == 2)
         foreach (var doc in new[] { manifest.RootElement, source.RootElement, catalog.RootElement[0] })
         {
             Equal("AutoMarketbuddy", doc.GetProperty("InternalName").GetString());
-            Equal("1.1.1.0", doc.GetProperty("AssemblyVersion").GetString());
+            Equal("1.2.0.0", doc.GetProperty("AssemblyVersion").GetString());
             Equal(15, doc.GetProperty("DalamudApiLevel").GetInt32());
         }
         Equal(false, manifest.RootElement.GetProperty("CanUnloadAsync").GetBoolean());
@@ -1516,8 +1516,8 @@ if (args.Length == 2)
         var metadata = pe.GetMetadataReader();
         var assembly = metadata.GetAssemblyDefinition();
         Equal("AutoMarketbuddy", metadata.GetString(assembly.Name));
-        Equal(new Version(1, 1, 1, 0), assembly.Version);
-        if (!catalog.RootElement[0].GetProperty("DownloadLinkInstall").GetString()!.Contains("/v1.1.1/"))
+        Equal(new Version(1, 2, 0, 0), assembly.Version);
+        if (!catalog.RootElement[0].GetProperty("DownloadLinkInstall").GetString()!.Contains("/v1.2.0/"))
             throw new Exception("Catalog must use the release versioned package URL.");
         // The sale-history fallback changes prices, so its default must stay opt-in.
         var config = File.ReadAllText(Path.Combine(args[1], "AutoMarketbuddy/Configuration.cs"));

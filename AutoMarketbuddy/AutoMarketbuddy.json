@@ -2,7 +2,7 @@
   "Author": "amarinne",
   "Name": "Auto-Marketbuddy",
   "InternalName": "AutoMarketbuddy",
-  "AssemblyVersion": "1.1.1.0",
+  "AssemblyVersion": "1.2.0.0",
   "Description": "Preview or set existing retainer listing prices to the undercut target using fresh in-game comparisons. No companion plugin required.",
   "DalamudApiLevel": 15,
   "ApplicableVersion": "any",

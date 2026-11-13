@@ -4,7 +4,7 @@
 
 Run `./scripts/check.sh`. The behavior checks compile the production pricing, comparison-capture, session, price-change history, price-table grouping, suppression, manual-watch, and AutoRetainer-handoff code directly, without Dalamud or a game process.
 
-Checks cover quality and ownership filters, single subtraction, price bounds, complete responses, stale and conflicting data, Stop, restart, timeouts, changed listing identity, sequential acknowledgement, and AutoRetainer suppression ownership. Package checks read the assembly metadata without loading the plugin. They require `AutoMarketbuddy`, version `1.1.1.0`, and API 15 in the source manifest, package, and catalog.
+Checks cover quality and ownership filters, single subtraction, price bounds, complete responses, stale and conflicting data, Stop, restart, timeouts, changed listing identity, sequential acknowledgement, and AutoRetainer suppression ownership. Package checks read the assembly metadata without loading the plugin. They require `AutoMarketbuddy`, version `1.2.0.0`, and API 15 in the source manifest, package, and catalog.
 
 Sale-history fallback checks cover the toggle off (leave unchanged, no history read), toggle on (newest same-quality sale minus undercut, confirmed once), quality/mannequin/item filtering, no usable sale, a missing history packet timing out instead of reusing a price, and reuse of a cached empty-market decision on the next retainer.
 

@@ -2,7 +2,7 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
     <Authors>amarinne</Authors>
-    <Version>1.1.1.0</Version>
+    <Version>1.2.0.0</Version>
     <Description>Preview and set retainer listing prices to the undercut target with fresh in-game comparisons.</Description>
     <Copyright></Copyright>
     <DalamudPluginManifest>AutoMarketbuddy.json</DalamudPluginManifest>
