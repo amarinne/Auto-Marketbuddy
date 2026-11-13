@@ -130,7 +130,7 @@ Check("Preview compares duplicate item and quality listings only once", () =>
 {
     var game = Fake();
     var second = item with { Slot = 3, Quantity = 8, Price = 800 };
-    game.Snapshot = new[] { item, second };
+    game.SnapshotItems = new[] { item, second };
     game.Inventory = new() { [item.Slot] = item, [second.Slot] = second };
     using var session = new MarketSession(game);
     session.Start(false, 1, 500, 0);
@@ -524,7 +524,7 @@ Check("batch cannot advance until the submitted slot is acknowledged", () =>
 {
     var second = item with { Slot = 2, Quantity = 8, Price = 1200 };
     var game = Fake();
-    game.Snapshot = new[] { item, second };
+    game.SnapshotItems = new[] { item, second };
     game.Inventory = new() { [item.Slot] = item, [second.Slot] = second };
     using var session = new MarketSession(game);
     session.Start(true, 1, 500, 0);
@@ -559,7 +559,7 @@ Check("invalid or mixed snapshot is rejected before opening anything", () =>
         item with { CharacterId = 101 }, item with { Price = 0 }, item with { Slot = -1 }, item with { Slot = 20 } })
     {
         var game = Fake();
-        game.Snapshot = new[] { item, bad };
+        game.SnapshotItems = new[] { item, bad };
         using var session = new MarketSession(game);
         session.Start(true, 1, 500, 0);
         Equal(false, session.IsRunning);
@@ -638,8 +638,8 @@ Check("pending confirmation remains explicit after Stop and after local verifica
 Check("diagnostic trace is bounded and a restart clears old decision evidence", () =>
 {
     var game = Fake();
-    game.Snapshot = Enumerable.Range(0, 20).Select(n => item with { Slot = (short)n }).ToArray();
-    game.Inventory = game.Snapshot.ToDictionary(x => x.Slot);
+    game.SnapshotItems = Enumerable.Range(0, 20).Select(n => item with { Slot = (short)n }).ToArray();
+    game.Inventory = game.SnapshotItems.ToDictionary(x => x.Slot);
     using var session = new MarketSession(game);
     session.Start(false, 1, 500, 0);
     for (var n = 1; n <= 100; n++) Tick(session, n);
@@ -864,7 +864,7 @@ Check("AutoRetainer handoff waits for the sale list container", () =>
 Check("AutoRetainer handoff skips a retainer with no active listings", () =>
 {
     var game = Fake();
-    game.Snapshot = Array.Empty<SaleItem>();
+    game.SnapshotItems = Array.Empty<SaleItem>();
     game.Inventory = new();
     using var f = new HandoffFixture(game, AutoRetainerMode.Apply);
     f.Ipc.Step("Retainer");
@@ -1058,16 +1058,24 @@ Check("AutoRetainer verifies its retainer again before starting the loaded list"
 });
 Check("price history records one row for each observed change and no duplicate", () =>
 {
-    var history = new PriceChangeHistory();
-    Equal(false, history.Observe(item, "Retainer"));
+    var lines = new List<string>();
+    var history = new PriceChangeHistory(lines.Add);
+    Equal(PriceObservation.Baseline, history.Observe(item, "Retainer"));
     Equal(0, history.Count);
-    Equal(true, history.Observe(item with { Price = 1791 }, "Retainer"));
+    Equal(PriceObservation.Changed, history.Observe(item with { Price = 1791 }, "Retainer"));
     Equal(1, history.Count);
     Equal(1000U, history.Changes[0].PreviousPrice);
     Equal<uint?>(1791, history.Changes[0].ProposedPrice);
     Equal("Retainer", history.Changes[0].RetainerName);
-    Equal(false, history.Observe(item with { Price = 1791 }, "Retainer"));
+    Equal(PriceObservation.None, history.Observe(item with { Price = 1791 }, "Retainer"));
     Equal(1, history.Count);
+    // A baseline and a change each write one Information line with retainer, slot, item and price.
+    Equal(2, lines.Count);
+    if (!lines[0].StartsWith("Price baseline:") || !lines[0].Contains("\"Retainer\"") ||
+        !lines[0].Contains("slot 8") || !lines[0].Contains("item 42") || !lines[0].Contains("1000"))
+        throw new Exception(lines[0]);
+    if (!lines[1].StartsWith("Price change:") || !lines[1].Contains("1000 -> 1791"))
+        throw new Exception(lines[1]);
 
     var preview = new PriceChangeHistory();
     Equal(true, preview.Report(item, "Retainer", 900, applied: false));
@@ -1075,21 +1083,21 @@ Check("price history records one row for each observed change and no duplicate",
     Equal(1, preview.Count);
     Equal<uint?>(900, preview.Changes[0].ProposedPrice);
     // A preview does not change the listing, so a manual move to 900 is still one new change.
-    Equal(true, preview.Observe(item with { Price = 900 }, "Retainer"));
+    Equal(PriceObservation.Changed, preview.Observe(item with { Price = 900 }, "Retainer"));
     Equal(2, preview.Count);
     Equal(1000U, preview.Changes[1].PreviousPrice);
     Equal<uint?>(900, preview.Changes[1].ProposedPrice);
     // The applied result moves the baseline, so a later observation is not a second record.
     Equal(true, preview.Report(item with { Price = 900 }, "Retainer", 899, applied: true));
     Equal(3, preview.Count);
-    Equal(false, preview.Observe(item with { Price = 899 }, "Retainer"));
+    Equal(PriceObservation.None, preview.Observe(item with { Price = 899 }, "Retainer"));
     Equal(3, preview.Count);
 
     // Preview and the same verified apply are one row, and observation stays quiet.
     var applied = new PriceChangeHistory();
     Equal(true, applied.Report(item, "Retainer", 900, applied: false));
     Equal(false, applied.Report(item, "Retainer", 900, applied: true));
-    Equal(false, applied.Observe(item with { Price = 900 }, "Retainer"));
+    Equal(PriceObservation.None, applied.Observe(item with { Price = 900 }, "Retainer"));
     Equal(1, applied.Count);
 });
 Check("AutoRetainer handoff writes price changes to the shared history", () =>
@@ -1110,7 +1118,7 @@ Check("AutoRetainer handoff writes price changes to the shared history", () =>
     Equal<uint?>(899, history.Changes[0].ProposedPrice);
     Equal("Retainer", history.Changes[0].RetainerName);
     // The normal read-only observation after the run must not repeat the same change.
-    Equal(false, history.Observe(item with { Price = 899 }, "Retainer"));
+    Equal(PriceObservation.None, history.Observe(item with { Price = 899 }, "Retainer"));
     Equal(1, history.Count);
 
     // A later run keeps the earlier row and appends in processing order.
@@ -1131,7 +1139,7 @@ Check("processing and history follow the sale list's displayed order", () =>
     var game = new FakeMarket(top, new[] { Listing(900) })
     {
         // Inventory order differs from the order that the game shows in the sale list.
-        Snapshot = new[] { middle, top, bottom },
+        SnapshotItems = new[] { middle, top, bottom },
         Inventory = new() { [top.Slot] = top, [middle.Slot] = middle, [bottom.Slot] = bottom },
         SaleListSlots = new short[] { 5, 9, 2 },
     };
@@ -1150,7 +1158,7 @@ Check("listings missing from the displayed order stay last in slot order", () =>
     var third = item with { Slot = 5, Quantity = 3 };
     var game = new FakeMarket(first, new[] { Listing(900) })
     {
-        Snapshot = new[] { first, second, third },
+        SnapshotItems = new[] { first, second, third },
         Inventory = new() { [first.Slot] = first, [second.Slot] = second, [third.Slot] = third },
         SaleListSlots = new short[] { 5 },
     };
@@ -1158,6 +1166,138 @@ Check("listings missing from the displayed order stay last in slot order", () =>
     session.Start(false, 1, 500, 0);
     for (var n = 1; n < 40; n++) session.Update(n * 500L);
     Equal("5,2,9", string.Join(',', game.OpenedSlots));
+});
+Check("a manual price edit is one history row when the sale list is hidden by its editor", () =>
+{
+    // The game hides the sale list while the price editor is open, and a container reload can
+    // hide the prices or report the price from before the edit after the editor closes. The old
+    // passive loop waited for a ready sale list and read only that container, so it missed both.
+    var game = Fake();
+    game.SellListOpen = true;
+    game.ListContentReady = false; // The container is not readable yet.
+    var lines = new List<string>();
+    var history = new PriceChangeHistory(lines.Add);
+    var watch = new ManualPriceWatch(game, history);
+
+    watch.Update(0);
+    Equal(0, history.Count);
+
+    game.EditorOpen = true;
+    game.SaleListHidden = true;
+    game.Edited = item;
+    watch.Update(100); // Baseline from the editor before the edit.
+    Equal(0, history.Count);
+    Equal(1, lines.Count);
+    if (!lines[0].StartsWith("Price baseline:") || !lines[0].Contains("1000")) throw new Exception(lines[0]);
+
+    // The owner confirms 1791. The game reports the confirm, then closes the editor and reloads
+    // the container, which still reports the old price.
+    game.Confirmed = (item.Slot, 1791, 150);
+    game.EditorOpen = false;
+    game.SaleListHidden = false;
+    game.ListContentReady = true;
+    watch.Update(200);
+    Equal(1, history.Count);
+    Equal(1000U, history.Changes[0].PreviousPrice);
+    Equal<uint?>(1791, history.Changes[0].ProposedPrice);
+
+    // A second observation of the same stale container price adds no row and no reverse row.
+    watch.Update(300);
+    watch.Update(400);
+    watch.Update(2_000);
+    Equal(1, history.Count);
+    Equal(2, lines.Count);
+    if (!lines.Any(x => x.StartsWith("Price change:") && x.Contains("1000 -> 1791")))
+        throw new Exception(string.Join('|', lines));
+
+    // When the container catches up, the observation is quiet. A later manual change is one row.
+    game.Item = item with { Price = 1791 };
+    watch.Update(2_500);
+    Equal(1, history.Count);
+    game.Item = item with { Price = 1500 };
+    watch.Update(3_000);
+    Equal(2, history.Count);
+    Equal(1791U, history.Changes[1].PreviousPrice);
+    Equal<uint?>(1500, history.Changes[1].ProposedPrice);
+
+    // An editor close without a confirm click does not record the typed price.
+    game.EditorOpen = true;
+    game.Edited = game.Item;
+    watch.Update(4_000);
+    game.EditorOpen = false;
+    watch.Update(4_100);
+    watch.Update(4_200);
+    Equal(2, history.Count);
+
+    // The same store treats an applied run as exactly one row and a later poll as no change.
+    var appliedGame = Fake();
+    var appliedHistory = new PriceChangeHistory();
+    using var session = new MarketSession(appliedGame, appliedHistory);
+    session.Start(true, 1, 500, 0);
+    for (var n = 1; n <= 4; n++) Tick(session, n);
+    appliedGame.Acknowledge();
+    Tick(session, 5);
+    Tick(session, 6);
+    Equal("Completed", session.Status);
+    var appliedWatch = new ManualPriceWatch(appliedGame, appliedHistory);
+    appliedGame.SellListOpen = true;
+    appliedWatch.Update(4000);
+    appliedWatch.Update(5000);
+    Equal(1, appliedHistory.Count);
+    Equal(1000U, appliedHistory.Changes[0].PreviousPrice);
+    Equal<uint?>(899, appliedHistory.Changes[0].ProposedPrice);
+});
+Check("an empty market without an offerings packet continues the run", () =>
+{
+    var second = item with { Slot = 2, Quantity = 8, Price = 1200, ItemId = 43 };
+    var game = Fake();
+    game.SnapshotItems = new[] { item, second };
+    game.Inventory = new() { [item.Slot] = item, [second.Slot] = second };
+    game.EmptyItems = new HashSet<uint> { item.ItemId };
+    game.Listings = new[] { Listing(900, id: 43) };
+    using var session = new MarketSession(game);
+    session.Start(false, 1, 500, 0);
+    for (var n = 1; n < 40; n++) Tick(session, n);
+    Equal("Completed", session.Status);
+    Equal(2, session.Results.Count);
+    Equal("No competing listing of the same quality.", session.Results[0].Outcome);
+    Equal("7,2", string.Join(',', game.OpenedSlots));
+    Equal(0, game.ConfirmCalls);
+    Equal(0, game.SetCalls);
+});
+Check("a stale same-item search does not prove an empty market", () =>
+{
+    var quote = new ComparisonCapture(42);
+    // Fresh window and request: after the grace period the zero count is this comparison's result.
+    Equal(true, quote.AcceptsEmptyMarket(42, 0, now: 3_000, requestStartedAt: 1_000,
+        windowOpenedAt: 1_500, requestIssued: true));
+    // No new request, a window that predates the request, another item, a non-zero count, or a
+    // window that is still inside the grace period cannot prove an empty market.
+    Equal(false, quote.AcceptsEmptyMarket(42, 0, 3_000, 1_000, 1_500, requestIssued: false));
+    Equal(false, quote.AcceptsEmptyMarket(42, 0, 3_000, 1_000, 500, requestIssued: true));
+    Equal(false, quote.AcceptsEmptyMarket(43, 0, 3_000, 1_000, 1_500, requestIssued: true));
+    Equal(false, quote.AcceptsEmptyMarket(42, 3, 3_000, 1_000, 1_500, requestIssued: true));
+    Equal(false, quote.AcceptsEmptyMarket(42, 0, 2_000, 1_000, 1_500, requestIssued: true));
+    // An offerings packet still completes normally, including an empty page.
+    Equal<IReadOnlyList<MarketListing>?>(null, quote.Complete(42, 0));
+    quote.Add(4, Array.Empty<(ulong, MarketListing)>());
+    Equal(0, quote.Complete(42, 0)!.Count);
+    Equal(false, quote.AcceptsEmptyMarket(42, 0, 3_000, 1_000, 1_500, requestIssued: true));
+
+    // The same state in a run: the request was not reissued, so the item keeps waiting and the
+    // run ends on the wall-clock deadline without setting or confirming a price.
+    var game = Fake();
+    game.EmptyItems = new HashSet<uint> { item.ItemId };
+    game.EmptyRequestIssued = false;
+    using var session = new MarketSession(game);
+    session.Start(true, 1, 500, 0);
+    for (var n = 1; n <= 10; n++) Tick(session, n);
+    Equal(true, session.IsRunning);
+    session.Update(40_000);
+    Equal(false, session.IsRunning);
+    Equal(0, game.SetCalls);
+    Equal(0, game.ConfirmCalls);
+    if (!session.LastError.Contains("Timed out")) throw new Exception(session.LastError);
 });
 Console.WriteLine($"{count} behavior checks passed.");
 
@@ -1211,7 +1351,7 @@ sealed class FakeMarket(SaleItem item, IReadOnlyList<MarketListing> listings) : 
     public int CompareCalls;
     public short OpenedSlot = -1;
     public uint Proposed;
-    public IReadOnlyList<SaleItem>? Snapshot;
+    public IReadOnlyList<SaleItem>? SnapshotItems;
     public Dictionary<short, SaleItem>? Inventory;
     public List<short> OpenedSlots = new();
     public bool MenuReady = true;
@@ -1227,11 +1367,27 @@ sealed class FakeMarket(SaleItem item, IReadOnlyList<MarketListing> listings) : 
     public int EndCalls;
     public bool InteropHeld;
     public bool FailBegin;
+    // Manual-edit state: the price editor owns the listing while it is open, and the sale list
+    // can be hidden then. A reload can hide the container for a few frames after it closes.
+    public bool EditorOpen;
+    public SaleItem? Edited;
+    public bool SaleListHidden;
+    // An item with no competing listing sends no offerings packet; the search window and a new
+    // request id are the only positive signals. EmptyRequestIssued models a stale proxy state.
+    public HashSet<uint> EmptyItems = new();
+    public bool EmptyRequestIssued = true;
+    private long clock;
+    private long compareClock;
+    private ComparisonCapture capture = new(item.ItemId);
     public void BeginRun() { BeginCalls++; if (FailBegin) throw new InvalidOperationException("lock unavailable"); InteropHeld = true; }
     public void EndRun() { EndCalls++; InteropHeld = false; }
     public IReadOnlySet<ulong> OwnRetainers { get; } = new HashSet<ulong> { 30, 31 };
-    public bool ListVisible => SellListOpen;
-    public bool ListReady => SellListOpen && ListContentReady;
+    public bool ListVisible => SellListOpen && !SaleListHidden;
+    public bool PriceEditorOpen => EditorOpen;
+    public SaleItem? EditedListing => EditorOpen ? Edited : null;
+    public (short Slot, uint Price, long At)? ConfirmedEdit => Confirmed;
+    public (short Slot, uint Price, long At)? Confirmed;
+    public bool ListReady => ListVisible && ListContentReady;
     public bool HasListings => Capture().Count > 0;
     public bool SellListClosed => !SellListOpen;
     public string SelectedRetainerName => SelectedName;
@@ -1249,21 +1405,41 @@ sealed class FakeMarket(SaleItem item, IReadOnlyList<MarketListing> listings) : 
         SellListOpen = false;
         MenuReady = true;
     }
-    public IReadOnlyList<SaleItem> Capture() => Snapshot ?? new[] { Item };
+    public IReadOnlyList<SaleItem> Capture() => SnapshotItems ?? new[] { Item };
     public IReadOnlyList<short> SaleListSlots { get; set; } = Array.Empty<short>();
     public void ValidateSession(SaleItem target)
     {
         if (!SessionValid) throw new InvalidOperationException("Session changed");
     }
     public SaleItem ReadItem(short slot) => Inventory == null ? Item : Inventory[slot];
+    public IReadOnlyList<SaleItem> Snapshot()
+    {
+        // The container can stay readable while the sale list addon is hidden behind the editor.
+        if (!ListContentReady) return Array.Empty<SaleItem>();
+        return Capture();
+    }
     public void Open(SaleItem target) { OpenedSlot = target.Slot; OpenedSlots.Add(target.Slot); closed = false; }
     public bool EditorReady(SaleItem target) => Block != "editor";
-    public void Compare(SaleItem target) { CompareCalls++; }
-    public IReadOnlyList<MarketListing>? ReadComparison(SaleItem target) => Block == "quote" ? null : Listings;
+    public void Compare(SaleItem target)
+    {
+        CompareCalls++;
+        capture = new(target.ItemId);
+        compareClock = clock;
+    }
+    public IReadOnlyList<MarketListing>? ReadComparison(SaleItem target)
+    {
+        if (Block == "quote") return null;
+        clock += 500;
+        if (!EmptyItems.Contains(target.ItemId)) return Listings;
+        var windowAt = compareClock + 200;
+        return capture.AcceptsEmptyMarket(target.ItemId, 0, clock, compareClock, windowAt, EmptyRequestIssued)
+            ? Array.Empty<MarketListing>()
+            : null;
+    }
     public IReadOnlyList<HistorySale>? ReadHistory(SaleItem target) { HistoryReads++; return History; }
     public void SetPrice(SaleItem target, uint price) { SetCalls++; Proposed = price; }
     public void Confirm(SaleItem target, uint price) { ConfirmCalls++; }
-    public bool EditorClosed => closed;
+    public bool EditorClosed => closed && !EditorOpen;
     public void CancelOwnedEditor() => closed = Block != "close";
     public void Acknowledge()
     {

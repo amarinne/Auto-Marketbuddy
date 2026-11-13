@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not add the same observation twice.
 - Process and record listings in the retainer sale list's top-to-bottom order instead of inventory
   slot order.
+- Write one Information line to the Dalamud log for each new price baseline and each new history row.
+
+### Fixed
+- Record a price that you change by hand in the retainer sale list. The watcher reads the price
+  editor and its confirm click, keeps the price from before the edit as the baseline, and keeps
+  reading the listing after the editor closes while the game reloads the sale list.
+- Continue a run when an item has no competing listing. The empty market is accepted only after the
+  game opens the result window for that item, issues a new search request, and sends no offerings
+  packet for a short grace period. The item keeps its price and the run moves to the next item.
+  A missing result signal still stops the run on the existing deadline.
 
 ## [1.1.1] - 2026-11-08
 

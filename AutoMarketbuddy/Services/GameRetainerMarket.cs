@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using Dalamud.Game.Addon.Lifecycle;
+using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using Dalamud.Game.Network.Structures;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
@@ -27,6 +29,7 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
     private readonly IMarketBoard board;
     private readonly IFramework framework;
     private readonly IDataManager data;
+    private readonly IAddonLifecycle addonLifecycle;
     private readonly ConcurrentQueue<Packet> packets = new();
     private readonly ConcurrentQueue<HistoryPacket> historyPackets = new();
     // Marketbuddy exposes this lock so other plugins can drive the retainer
@@ -43,6 +46,14 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
     private nint listAddress;
     private ComparisonCapture? comparison;
     private bool comparing;
+    private long comparedAt;
+    private long searchWindowAt;
+    private int nextRequestIdAtCompare;
+    private uint searchItemIdAtCompare;
+    private uint listingCountAtCompare;
+    private short confirmedEditSlot = -1;
+    private uint confirmedEditPrice;
+    private long confirmedEditAt;
     private ushort editorId;
     private nint resultAddress;
     private ushort resultId;
@@ -50,7 +61,7 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
 
     public GameRetainerMarket(IGameGui gui, IClientState client, IPlayerState player,
         IObjectTable objects, IDalamudPluginInterface pluginInterface, IMarketBoard board, IFramework framework,
-        IDataManager dataManager)
+        IDataManager dataManager, IAddonLifecycle addonLifecycle)
     {
         this.gui = gui;
         this.client = client;
@@ -59,6 +70,7 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
         this.pluginInterface = pluginInterface;
         this.board = board;
         this.framework = framework;
+        this.addonLifecycle = addonLifecycle;
         data = dataManager;
         marketbuddyLock = pluginInterface.GetIpcSubscriber<string, bool>("Marketbuddy.Lock");
         marketbuddyUnlock = pluginInterface.GetIpcSubscriber<string, bool>("Marketbuddy.Unlock");
@@ -69,10 +81,36 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
             autoRetainerGetSuppressed.InvokeFunc, autoRetainerSetSuppressed.InvokeAction);
         board.OfferingsReceived += OnOfferings;
         board.HistoryReceived += OnHistory;
+        // The game reports each addon event to Dalamud. This listener only reads the confirm
+        // click of the retainer price editor; it never sends an event of its own.
+        addonLifecycle.RegisterListener(AddonEvent.PostReceiveEvent, "RetainerSell", OnRetainerSellEvent);
+    }
+
+    private void OnRetainerSellEvent(AddonEvent type, AddonArgs args)
+    {
+        if (args is not AddonReceiveEventArgs receive) return;
+        if (!framework.IsInFrameworkUpdateThread || framework.IsFrameworkUnloading) return;
+        var addon = Editor;
+        if (!Ready((AtkUnitBase*)addon)) return;
+        // Match the registration of the Confirm button instead of a guessed callback number.
+        var click = ButtonClickEvent((AtkUnitBase*)addon, addon->Confirm);
+        if (click == null) return;
+        if (receive.EventParam != click->Param) return;
+        var agent = AgentRetainer.Instance();
+        if (agent == null || agent->SellItemInventoryType != InventoryType.RetainerMarket) return;
+        var slot = (short)agent->SellItemInventorySlot;
+        if (slot is < 0 or >= 20) return;
+        confirmedEditSlot = slot;
+        confirmedEditPrice = (uint)addon->AskingPrice->Value;
+        confirmedEditAt = Environment.TickCount64;
     }
 
     public void BeginRun()
     {
+        // A run drives the editor itself. Drop any confirm seen before it so the passive watcher
+        // cannot attribute the run's own change to a manual edit.
+        confirmedEditAt = 0;
+        confirmedEditSlot = -1;
         // Older builds without the suppression IPC cannot be paused. The session
         // still stops if a retainer window or listing changes.
         try { autoRetainer.Acquire(); }
@@ -133,6 +171,30 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
     private AddonRetainerSell* Editor => (AddonRetainerSell*)Addon("RetainerSell");
     private static bool Ready(AtkUnitBase* addon) => addon != null && addon->IsVisible && addon->IsReady;
     public bool ListVisible => Ready(Addon("RetainerSellList"));
+    // Read-only. The sale list hides its price editor for manual edits, and other plugins can open
+    // the same editor, so the watcher reads this state and never operates it.
+    public bool PriceEditorOpen => Ready((AtkUnitBase*)Editor);
+
+    // The last price confirmation that the game reported for the retainer price editor. It is the
+    // direct signal for a manual change when the game has not yet exposed the new listing price.
+    public (short Slot, uint Price, long At)? ConfirmedEdit => confirmedEditAt == 0
+        ? null
+        : (confirmedEditSlot, confirmedEditPrice, confirmedEditAt);
+
+    public SaleItem? EditedListing
+    {
+        get
+        {
+            if (!PriceEditorOpen) return null;
+            var agent = AgentRetainer.Instance();
+            if (agent == null || agent->SellItemInventoryType != InventoryType.RetainerMarket) return null;
+            var slot = (short)agent->SellItemInventorySlot;
+            if (slot is < 0 or >= 20) return null;
+            // The container price is the price before the edit; the game updates it on confirmation.
+            try { return ReadItem(slot); }
+            catch (InvalidOperationException) { return null; }
+        }
+    }
     public bool ListReady
     {
         get
@@ -269,10 +331,12 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
     }
 
     // A read-only view for manual edits and other plugins. It tolerates a list that changes
-    // between checks and never takes ownership of the editor.
+    // between checks and never takes ownership of the editor. The container can stay readable while
+    // the sale list addon is hidden behind its price editor, so the list addon is not required.
     public IReadOnlyList<SaleItem> Snapshot()
     {
-        if (!ListVisible) return Array.Empty<SaleItem>();
+        if (!framework.IsInFrameworkUpdateThread || framework.IsFrameworkUnloading)
+            return Array.Empty<SaleItem>();
         try
         {
             var items = new List<SaleItem>();
@@ -367,6 +431,15 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
         resultAddress = 0;
         resultId = 0;
         comparing = true;
+        // A zero-listing market sends no offerings packet, so keep the facts that prove a new
+        // search window belongs to this comparison. A previous search of the same item must not
+        // satisfy the empty case.
+        comparedAt = Environment.TickCount64;
+        searchWindowAt = 0;
+        var proxy = InfoProxyItemSearch.Instance();
+        nextRequestIdAtCompare = proxy == null ? 0 : proxy->NextRequestId;
+        searchItemIdAtCompare = proxy == null ? 0 : proxy->SearchItemId;
+        listingCountAtCompare = proxy == null ? 0 : proxy->ListingCount;
         Click((AtkUnitBase*)Editor, Editor->ComparePrices);
     }
 
@@ -406,10 +479,27 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
         var result = Addon("ItemSearchResult");
         if (proxy == null) throw new InvalidOperationException("Market data is unavailable.");
         if (!Ready(result)) return null;
-        if (resultAddress == 0) { resultAddress = (nint)result; resultId = result->Id; }
+        if (resultAddress == 0)
+        {
+            // This comparison needs its own result window. Record when it opened after the request.
+            resultAddress = (nint)result;
+            resultId = result->Id;
+            searchWindowAt = Environment.TickCount64;
+        }
         if (resultAddress != (nint)result || resultId != result->Id)
             throw new InvalidOperationException("The comparison window was replaced.");
-        return comparison.Complete(proxy->SearchItemId, proxy->ListingCount);
+        var now = Environment.TickCount64;
+        if (comparison.Complete(proxy->SearchItemId, proxy->ListingCount) is { } listings) return listings;
+        // No offerings packet arrived. Accept the proxy's zero count only when a new search
+        // request or a new proxy state appeared after Compare() and this result window stayed
+        // open for the grace period. A stale same-item search cannot prove an empty market.
+        var requestIssued = proxy->NextRequestId != nextRequestIdAtCompare ||
+            proxy->SearchItemId != searchItemIdAtCompare ||
+            proxy->ListingCount != listingCountAtCompare;
+        return comparison.AcceptsEmptyMarket(proxy->SearchItemId, proxy->ListingCount, now, comparedAt,
+            searchWindowAt, requestIssued)
+            ? Array.Empty<MarketListing>()
+            : null;
     }
 
     private void CloseComparison()
@@ -425,6 +515,11 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
         packets.Clear();
         historyPackets.Clear();
         comparison = null;
+        comparedAt = 0;
+        searchWindowAt = 0;
+        nextRequestIdAtCompare = 0;
+        searchItemIdAtCompare = 0;
+        listingCountAtCompare = 0;
     }
 
     public void SetPrice(SaleItem item, uint price)
@@ -443,21 +538,27 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
         Click((AtkUnitBase*)Editor, Editor->Confirm);
     }
 
-    private static void Click(AtkUnitBase* addon, AtkComponentButton* button)
+    private static AtkEvent* ButtonClickEvent(AtkUnitBase* addon, AtkComponentButton* button)
     {
-        if (button == null || button->OwnerNode == null || !button->IsEnabled)
-            throw new InvalidOperationException("The requested button is unavailable.");
+        if (button == null || button->OwnerNode == null) return null;
         // Use the actual button registration instead of guessed node indices or callback numbers.
         var evt = button->OwnerNode->AtkResNode.AtkEventManager.Event;
         for (var count = 0; evt != null && count < 64; count++, evt = evt->NextEvent)
-        {
-            if (evt->State.EventType != AtkEventType.ButtonClick || evt->Listener != (AtkEventListener*)addon) continue;
-            var copy = *evt;
-            AtkEventData data = default;
-            evt->Listener->ReceiveEvent(AtkEventType.ButtonClick, (int)evt->Param, &copy, &data);
-            return;
-        }
-        throw new InvalidOperationException("The button's click registration is unsupported.");
+            if (evt->State.EventType == AtkEventType.ButtonClick && evt->Listener == (AtkEventListener*)addon)
+                return evt;
+        return null;
+    }
+
+    private static void Click(AtkUnitBase* addon, AtkComponentButton* button)
+    {
+        if (button == null || !button->IsEnabled)
+            throw new InvalidOperationException("The requested button is unavailable.");
+        var evt = ButtonClickEvent(addon, button);
+        if (evt == null)
+            throw new InvalidOperationException("The button's click registration is unsupported.");
+        var copy = *evt;
+        AtkEventData data = default;
+        evt->Listener->ReceiveEvent(AtkEventType.ButtonClick, (int)evt->Param, &copy, &data);
     }
 
     public void CancelOwnedEditor()
@@ -487,6 +588,7 @@ public sealed unsafe class GameRetainerMarket : IRetainerMarket, IDisposable
     {
         CancelRetainerExit();
         EndRun();
+        addonLifecycle.UnregisterListener(AddonEvent.PostReceiveEvent, "RetainerSell", OnRetainerSellEvent);
         board.OfferingsReceived -= OnOfferings;
         board.HistoryReceived -= OnHistory;
         packets.Clear();

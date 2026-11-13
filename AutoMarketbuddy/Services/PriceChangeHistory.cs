@@ -6,10 +6,14 @@ namespace AutoMarketbuddy.Services;
 public sealed record PriceChange(ulong CharacterId, uint WorldId, ulong RetainerId, string RetainerName,
     short Slot, uint ItemId, bool IsHq, uint PreviousPrice, uint? ProposedPrice);
 
+// What one observation did to the stored state. Baseline means the listing was seen for the first
+// time, so later observations can report a change.
+public enum PriceObservation { None, Baseline, Changed }
+
 // One in-memory log for every path that observes a retainer listing price: normal runs, the
 // AutoRetainer handoff, and manual edits in the retainer sale list. Recording never reads the game
 // or the market board. A listing keeps one baseline, so the same change is not written twice.
-public sealed class PriceChangeHistory
+public sealed class PriceChangeHistory(Action<string>? log = null)
 {
     public const int Capacity = 500;
     private sealed record ListingState(uint Price, uint? Proposed, string RetainerName);
@@ -47,38 +51,48 @@ public sealed class PriceChangeHistory
             }
         }
         Add(new(item.CharacterId, item.WorldId, item.RetainerId, name, item.Slot, item.ItemId, item.IsHq,
-            item.Price, proposed));
+            item.Price, proposed), applied ? "Price change" : "Price proposal");
         listings[key] = new(applied && proposed.HasValue ? proposed.Value : item.Price, proposed, name);
         return true;
     }
 
     // A listing that is already known keeps its last price. A later different price becomes one
     // change row, so manual edits and changes made by other plugins are captured without a fetch.
-    public bool Observe(SaleItem item, string retainerName)
+    public PriceObservation Observe(SaleItem item, string retainerName)
     {
         var key = new Key(item.CharacterId, item.WorldId, item.RetainerId, item.Slot, item.ItemId, item.IsHq);
         var name = Name(retainerName, listings.TryGetValue(key, out var previous) ? previous : null);
         if (previous == null)
         {
             listings[key] = new(item.Price, null, name);
-            return false;
+            log?.Invoke($"Price baseline: {Where(item, name)} is {item.Price} gil.");
+            return PriceObservation.Baseline;
         }
         if (previous.Price == item.Price)
         {
             if (name.Length > 0 && name != previous.RetainerName) listings[key] = previous with { RetainerName = name };
-            return false;
+            return PriceObservation.None;
         }
         Add(new(item.CharacterId, item.WorldId, item.RetainerId, name, item.Slot, item.ItemId, item.IsHq,
-            previous.Price, item.Price));
+            previous.Price, item.Price), "Price change");
         listings[key] = new(item.Price, item.Price, name);
-        return true;
+        return PriceObservation.Changed;
     }
 
-    private void Add(PriceChange change)
+    private void Add(PriceChange change, string kind)
     {
         changes.Add(change);
         if (changes.Count > Capacity) changes.RemoveAt(0);
+        log?.Invoke($"{kind}: {Where(change.RetainerName, change.Slot, change.ItemId, change.IsHq)}, " +
+            $"{change.PreviousPrice} -> {change.ProposedPrice?.ToString() ?? "unknown"} gil.");
     }
+
+    // One line carries the evidence a live test needs: retainer, slot, item, and price.
+    private static string Where(SaleItem item, string retainerName) =>
+        Where(retainerName, item.Slot, item.ItemId, item.IsHq);
+
+    private static string Where(string retainerName, short slot, uint itemId, bool isHq) =>
+        $"retainer \"{retainerName}\", slot {slot + 1}, item {itemId} ({(isHq ? "HQ" : "NQ")})";
 
     private static string Name(string current, ListingState? previous) =>
         current.Length > 0 ? current : previous?.RetainerName ?? "";

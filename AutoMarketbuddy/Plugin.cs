@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using AutoMarketbuddy.Services;
 using AutoMarketbuddy.Windows;
+using Dalamud.Game.Addon.Lifecycle;
 using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
@@ -30,7 +31,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly IDataManager data;
     private readonly Dictionary<uint, string> itemNames = new();
     private readonly Configuration configuration;
-    private readonly PriceChangeHistory priceHistory = new();
+    private readonly PriceChangeHistory priceHistory;
+    private readonly ManualPriceWatch manualWatch;
     private readonly WindowSystem windows = new("AutoMarketbuddy");
     private readonly MainWindow window;
     private readonly ConcurrentQueue<Control> controls = new();
@@ -44,7 +46,7 @@ public sealed class Plugin : IDalamudPlugin
     public Plugin(IDalamudPluginInterface pluginInterface, ICommandManager commandManager,
         IPluginLog pluginLog, IGameGui gameGui, IFramework framework, IClientState clientState,
         IPlayerState playerState, IObjectTable objectTable, IChatGui chatGui, IMarketBoard marketBoard,
-        IDataManager dataManager)
+        IDataManager dataManager, IAddonLifecycle addonLifecycle)
     {
         this.pluginInterface = pluginInterface;
         commands = commandManager;
@@ -56,8 +58,12 @@ public sealed class Plugin : IDalamudPlugin
         log = pluginLog;
         configuration = pluginInterface.GetPluginConfig() as Configuration ?? new();
         configuration.Initialize(pluginInterface);
-        market = new(gameGui, clientState, playerState, objectTable, pluginInterface, marketBoard, framework, dataManager);
+        // One Information line per baseline and per price-change row gives a later live test a
+        // log trail even when the game state does not show the change.
+        priceHistory = new(message => log.Information(message));
+        market = new(gameGui, clientState, playerState, objectTable, pluginInterface, marketBoard, framework, dataManager, addonLifecycle);
         session = new(market, priceHistory);
+        manualWatch = new(market, priceHistory);
         autoRetainerIpc = new(pluginInterface);
         autoRetainer = new(session, market, autoRetainerIpc,
             () => new(configuration.AutoRetainerMode, configuration.UndercutAmount,
@@ -198,12 +204,9 @@ public sealed class Plugin : IDalamudPlugin
             // The handoff observes completion or failure after the session has advanced this frame.
             autoRetainer.Update(now);
             // Outside a run, a listing price can change through manual edits or another plugin.
-            // Read the sell list only; this path never fetches market data or touches a price.
-            if (!session.IsRunning && market.ListReady)
-            {
-                var retainerName = market.SelectedRetainerName;
-                foreach (var listing in market.Snapshot()) priceHistory.Observe(listing, retainerName);
-            }
+            // The watcher reads the sale list and its price editor only; this path never fetches
+            // market data, sets a price, or confirms one.
+            if (!session.IsRunning) manualWatch.Update(now);
             if (wasRunning && !session.IsRunning && session.Status == "Completed" &&
                 configuration.ExitRetainerOnFinish && !autoRetainer.IsActive)
                 market.BeginRetainerExit();

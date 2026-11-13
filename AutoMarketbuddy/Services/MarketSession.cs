@@ -112,10 +112,18 @@ public interface IRetainerMarket
     void BeginRun();
     void EndRun();
     IReadOnlyList<SaleItem> Capture();
+    // Read-only sale list view for passive observation. It may be empty while the game reloads.
+    IReadOnlyList<SaleItem> Snapshot();
     IReadOnlyList<short> SaleListSlots { get; }
     IReadOnlySet<ulong> OwnRetainers { get; }
     bool ListVisible { get; }
     bool ListReady { get; }
+    // The retainer price editor is open. Read-only: the watcher never operates the editor.
+    bool PriceEditorOpen { get; }
+    // The listing that the open price editor changes, with its price before the edit.
+    SaleItem? EditedListing { get; }
+    // The last price confirmation that the game reported for that editor, with its time.
+    (short Slot, uint Price, long At)? ConfirmedEdit { get; }
     bool HasListings { get; }
     bool SellListClosed { get; }
     string SelectedRetainerName { get; }
