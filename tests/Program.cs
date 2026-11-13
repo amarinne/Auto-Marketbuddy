@@ -1450,6 +1450,45 @@ Check("a confirmed proposal updates the same row in place", () =>
     Equal(1, watchHistory.Count);
     Equal(PriceChangeKind.Applied, watchHistory.Changes[0].Kind);
 });
+Check("Clear empties the table while the sale list stays open", () =>
+{
+    // Live log 2026-11-14 03:23: each Clear click logged every listing as a new baseline and the
+    // table refilled on the next frame.
+    var game = Fake();
+    game.SellListOpen = true;
+    var lines = new List<string>();
+    var history = new PriceChangeHistory(lines.Add);
+    var watch = new ManualPriceWatch(game, history);
+    watch.Update(100);
+    Equal(true, history.Report(item, "Retainer", 900, applied: false));
+    Equal(1, PriceChangeTable.Build(history.Rows).Count);
+    var logged = lines.Count;
+
+    history.Clear();
+    watch.Update(200);
+    watch.Update(300);
+    Equal(0, PriceChangeTable.Build(history.Rows).Count);
+    Equal(0, history.Count);
+    Equal(logged, lines.Count);
+
+    // A later change still compares with the known price and shows one row again.
+    game.Item = item with { Price = 950 };
+    watch.Update(400);
+    var rows = PriceChangeTable.Build(history.Rows);
+    Equal(1, rows.Count);
+    Equal<uint?>(1000, rows[0].PreviousPrice);
+    Equal(950U, rows[0].Price);
+    Equal(PriceChangeKind.Applied, rows[0].Kind);
+
+    // The same proposal after Clear is shown again instead of being treated as already recorded.
+    history.Clear();
+    Equal(true, history.Report(item with { Price = 950 }, "Retainer", 900, applied: false));
+    Equal(1, PriceChangeTable.Build(history.Rows).Count);
+    // A new listing still appears as a baseline.
+    history.Clear();
+    Equal(PriceObservation.Baseline, history.Observe(item with { Slot = 3 }, "Retainer"));
+    Equal(1, PriceChangeTable.Build(history.Rows).Count);
+});
 Console.WriteLine($"{count} behavior checks passed.");
 
 if (args.Length == 2)

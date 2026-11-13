@@ -60,6 +60,9 @@ public sealed class PriceChangeHistory(Action<string>? log = null)
         public uint? Proposed = proposed;
         public string RetainerName = retainerName;
         public PriceChange? Active = active;
+        // Clear hides the row but keeps the price, so the next observation of the same listing
+        // is not a new baseline. A later change or proposal shows the row again.
+        public bool Hidden;
     }
 
     private readonly record struct Key(ulong CharacterId, uint WorldId, ulong RetainerId, short Slot,
@@ -80,7 +83,7 @@ public sealed class PriceChangeHistory(Action<string>? log = null)
             var rows = new List<PriceChangeRow>(order.Count);
             foreach (var key in order)
             {
-                if (!listings.TryGetValue(key, out var state)) continue;
+                if (!listings.TryGetValue(key, out var state) || state.Hidden) continue;
                 rows.Add(state.Active is { } active
                     ? new(key.CharacterId, key.WorldId, key.RetainerId, state.RetainerName, key.Slot,
                         key.ItemId, key.IsHq, active.PreviousPrice, active.ProposedPrice ?? state.Price,
@@ -92,11 +95,17 @@ public sealed class PriceChangeHistory(Action<string>? log = null)
         }
     }
 
+    // Empty the table. Known prices stay as baselines: removing them made the next frame of an
+    // open sale list record every listing again, so the table refilled at once.
     public void Clear()
     {
         changes.Clear();
-        listings.Clear();
-        order.Clear();
+        foreach (var state in listings.Values)
+        {
+            state.Active = null;
+            state.Proposed = null;
+            state.Hidden = true;
+        }
     }
 
     // A run reports its decision. A preview keeps the current price; a verified apply moves the
@@ -147,6 +156,7 @@ public sealed class PriceChangeHistory(Action<string>? log = null)
             previous.Proposed = proposed;
             previous.RetainerName = name;
             previous.Active = change;
+            previous.Hidden = false;
         }
         return true;
     }
@@ -205,6 +215,7 @@ public sealed class PriceChangeHistory(Action<string>? log = null)
         previous.Proposed = item.Price;
         previous.RetainerName = name;
         previous.Active = change;
+        previous.Hidden = false;
         return PriceObservation.Changed;
     }
 

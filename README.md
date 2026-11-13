@@ -22,8 +22,9 @@ AutoRetainer handoff runs, price edits that you make in the retainer sale list, 
 comparisons that you open in the price editor. The table does not request market data. It shows
 each observed listing, including listings that did not change. Rows follow the retainer sale list
 from top to bottom. Identical rows merge with a count. A proposed price is dim and has a tooltip.
-Use Clear to remove the list. Each new baseline, each new row, and each captured comparison also
-adds one Information line to the Dalamud log.
+Clear empties the table. A listing returns to the table when its price changes or gets a new
+proposal. Each new baseline, each new row, and each captured comparison also adds one Information
+line to the Dalamud log.
 
 ## AutoRetainer
 

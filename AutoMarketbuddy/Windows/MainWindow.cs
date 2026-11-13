@@ -11,7 +11,8 @@ public sealed class MainWindow(MarketSession session, Configuration configuratio
     Func<uint, string> itemName)
     : Window("Auto-Marketbuddy##AutoMarketbuddyMainWindow", ImGuiWindowFlags.None)
 {
-    private int lastHistoryCount;
+    private int lastRowCount;
+    private int scrollRow = -1;
     private int scrollFramesLeft;
 
     public override void PreDraw()
@@ -82,6 +83,13 @@ public sealed class MainWindow(MarketSession session, Configuration configuratio
 
         if (session.LastError.Length > 0) ImGui.TextWrapped($"Stopped: {session.LastError}");
         var rows = PriceChangeTable.Build(history.Rows);
+        if (rows.Count > lastRowCount)
+        {
+            // Show the first new row, not the last: a newly opened sale list starts at its top.
+            scrollRow = lastRowCount;
+            scrollFramesLeft = 3;
+        }
+        lastRowCount = rows.Count;
         if (rows.Count == 0) return;
 
         ImGui.Separator();
@@ -98,10 +106,17 @@ public sealed class MainWindow(MarketSession session, Configuration configuratio
             ImGui.TableSetupColumn("Retainer", ImGuiTableColumnFlags.WidthFixed, 100f);
             ImGui.TableHeadersRow();
             // First-seen order follows the sale list from top to bottom. Identical rows merge.
-            foreach (var row in rows)
+            for (var index = 0; index < rows.Count; index++)
             {
+                var row = rows[index];
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
+                // Repeat for a few frames: the scroll range grows only after the rows are laid out.
+                if (index == scrollRow && scrollFramesLeft > 0)
+                {
+                    ImGui.SetScrollHereY(0f);
+                    scrollFramesLeft--;
+                }
                 ImGui.TextUnformatted(itemName(row.ItemId) + (row.IsHq ? " HQ" : "") +
                     (row.Count > 1 ? $" ×{row.Count}" : ""));
                 ImGui.TableNextColumn();
@@ -121,18 +136,6 @@ public sealed class MainWindow(MarketSession session, Configuration configuratio
                 ImGui.TextUnformatted(row.RetainerName);
             }
             ImGui.EndTable();
-        }
-        if (rows.Count != lastHistoryCount)
-        {
-            lastHistoryCount = rows.Count;
-            scrollFramesLeft = 3;
-        }
-        // Anchor to the end for a few frames: the scroll range only grows
-        // after the new row is laid out, so a single SetScrollY clamps short.
-        if (scrollFramesLeft > 0)
-        {
-            ImGui.SetScrollHereY(1.0f);
-            scrollFramesLeft--;
         }
         ImGui.EndChild();
     }

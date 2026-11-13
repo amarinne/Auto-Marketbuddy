@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   price is dim and has a tooltip; a confirmed price updates the same row.
 
 ### Fixed
+- Keep the price table empty after Clear while the sale list is open. Clear now keeps the known
+  prices, so it does not record every listing as a new baseline again. The table also scrolls to
+  the first new row instead of the last row.
 - Record a price that you change by hand in the retainer sale list. The watcher reads the price
   editor and its confirm click, keeps the price from before the edit as the baseline, and keeps
   reading the listing after the editor closes while the game reloads the sale list.
